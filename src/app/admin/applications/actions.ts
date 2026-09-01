@@ -3,9 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { regenerateFilledPdf } from "@/lib/applications";
 import { logAuditEvent } from "@/lib/audit";
+import { sendEmail, signingRequestEmail } from "@/lib/email";
 import { WorksheetData } from "@/lib/fields/types";
+import { signingUrl } from "@/lib/signing";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { SIGNING_TOKEN_TTL_DAYS, generateToken, tokenExpiry } from "@/lib/tokens";
 
 /**
  * Create an application from a reviewed worksheet: pick program → resolve
@@ -159,4 +162,173 @@ export async function uploadTemplateBlank(formData: FormData): Promise<void> {
   if (error) throw new Error(`Upload failed: ${error.message}`);
 
   revalidatePath("/admin/applications");
+}
+
+/**
+ * Send the application for signature: regenerate the PDF one final time
+ * (agreement dates = send date), create the signer + signing token, email
+ * the signing link, status → sent.
+ */
+export async function sendForSignature(input: {
+  applicationId: string;
+  signerName: string;
+  signerEmail: string;
+}): Promise<{ link: string }> {
+  const staff = await requireStaff();
+  const supabase = createAdminClient();
+
+  const signerName = input.signerName.trim();
+  const signerEmail = input.signerEmail.trim();
+  if (!signerName || !signerEmail) throw new Error("Signer name and email are required");
+
+  const { data: application } = await supabase
+    .from("applications")
+    .select(
+      "id, org_id, status, filled_pdf_path, programs(name), worksheets(customers(business_name))"
+    )
+    .eq("id", input.applicationId)
+    .single();
+  if (!application) throw new Error("Application not found");
+  if (application.status !== "draft") throw new Error("Application already sent");
+
+  const { filled } = await regenerateFilledPdf(input.applicationId);
+  if (!filled) {
+    throw new Error("Upload the blank template PDF before sending for signature");
+  }
+
+  const { token, hash } = generateToken();
+  const { data: signer, error: signerError } = await supabase
+    .from("signers")
+    .insert({
+      application_id: application.id,
+      name: signerName,
+      email: signerEmail,
+      sign_order: 1,
+      status: "sent",
+      token_hash: hash,
+      token_expires_at: tokenExpiry(SIGNING_TOKEN_TTL_DAYS).toISOString(),
+    })
+    .select("id")
+    .single();
+  if (signerError) throw new Error(`Could not create signer: ${signerError.message}`);
+
+  const { error } = await supabase
+    .from("applications")
+    .update({ status: "sent", sent_at: new Date().toISOString() })
+    .eq("id", application.id);
+  if (error) throw new Error(`Could not update status: ${error.message}`);
+
+  const businessName =
+    (application.worksheets as unknown as { customers: { business_name: string } | null })
+      ?.customers?.business_name ?? "your business";
+  const documentName =
+    (application.programs as unknown as { name: string })?.name ?? "ATM application";
+
+  const email = signingRequestEmail({
+    signerName,
+    businessName,
+    documentName,
+    link: signingUrl(token),
+    expiresDays: SIGNING_TOKEN_TTL_DAYS,
+  });
+  await sendEmail({
+    to: signerEmail,
+    ...email,
+    template: "signing_request",
+    org_id: application.org_id,
+    application_id: application.id,
+  });
+
+  await logAuditEvent({
+    event_type: "sent",
+    org_id: application.org_id,
+    application_id: application.id,
+    signer_id: signer.id,
+    meta: { by: staff.fullName, signer_email: signerEmail },
+  });
+
+  revalidatePath(`/admin/applications/${application.id}`);
+  return { link: signingUrl(token) };
+}
+
+/** Void an application and invalidate its signing tokens. */
+export async function voidApplication(applicationId: string): Promise<void> {
+  const staff = await requireStaff();
+  const supabase = createAdminClient();
+
+  const { data: application } = await supabase
+    .from("applications")
+    .select("id, org_id, status")
+    .eq("id", applicationId)
+    .single();
+  if (!application) throw new Error("Application not found");
+  if (application.status === "completed") {
+    throw new Error("Completed applications cannot be voided");
+  }
+
+  await supabase
+    .from("applications")
+    .update({ status: "voided", voided_at: new Date().toISOString() })
+    .eq("id", applicationId);
+  // Expire all signer tokens immediately.
+  await supabase
+    .from("signers")
+    .update({ token_expires_at: new Date().toISOString() })
+    .eq("application_id", applicationId);
+
+  await logAuditEvent({
+    event_type: "voided",
+    org_id: application.org_id,
+    application_id: applicationId,
+    meta: { by: staff.fullName },
+  });
+
+  revalidatePath(`/admin/applications/${applicationId}`);
+  revalidatePath("/admin/applications");
+}
+
+/** Revise & resend: void the old application, clone a fresh draft from it. */
+export async function reviseAndResend(
+  applicationId: string
+): Promise<{ applicationId: string }> {
+  const staff = await requireStaff();
+  const supabase = createAdminClient();
+
+  const { data: old } = await supabase
+    .from("applications")
+    .select("id, org_id, worksheet_id, program_id, template_id, data, status")
+    .eq("id", applicationId)
+    .single();
+  if (!old) throw new Error("Application not found");
+
+  if (old.status !== "voided" && old.status !== "completed") {
+    await voidApplication(applicationId);
+  }
+
+  const { data: fresh, error } = await supabase
+    .from("applications")
+    .insert({
+      org_id: old.org_id,
+      worksheet_id: old.worksheet_id,
+      program_id: old.program_id,
+      template_id: old.template_id,
+      data: old.data,
+      status: "draft",
+      revises_application_id: old.id,
+      created_by: staff.userId,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(`Could not create revision: ${error.message}`);
+
+  await logAuditEvent({
+    event_type: "created",
+    org_id: old.org_id,
+    application_id: fresh.id,
+    meta: { action: "revision", revises: old.id, by: staff.fullName },
+  });
+
+  await regenerateFilledPdf(fresh.id);
+  revalidatePath("/admin/applications");
+  return { applicationId: fresh.id };
 }

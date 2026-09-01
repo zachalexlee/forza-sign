@@ -15,6 +15,7 @@ interface SendEmailInput {
   org_id?: string;
   worksheet_id?: string;
   application_id?: string;
+  attachments?: { filename: string; content: Buffer }[];
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<void> {
@@ -32,6 +33,10 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
         to: input.to,
         subject: input.subject,
         html: input.html,
+        attachments: input.attachments?.map((a) => ({
+          filename: a.filename,
+          content: a.content,
+        })),
       });
       if (error) {
         status = `error: ${error.message}`.slice(0, 200);
@@ -102,6 +107,46 @@ export function worksheetSubmittedEmail(opts: {
           Review it now
         </a>
       </p>
+    `),
+  };
+}
+
+export function signingRequestEmail(opts: {
+  signerName: string;
+  businessName: string;
+  documentName: string;
+  link: string;
+  expiresDays: number;
+  reminder?: boolean;
+}): { subject: string; html: string } {
+  return {
+    subject: `${opts.reminder ? "Reminder: " : ""}Signature requested — ${opts.documentName}`,
+    html: wrapper(`
+      <p>Hello ${escapeHtml(opts.signerName)},</p>
+      <p>Forza Payments has prepared your <strong>${escapeHtml(opts.documentName)}</strong>
+      for <strong>${escapeHtml(opts.businessName)}</strong>. Please review and sign it electronically.</p>
+      <p style="margin: 24px 0;">
+        <a href="${opts.link}" style="background: #18181b; color: #fff; padding: 10px 18px; border-radius: 6px; text-decoration: none;">
+          Review &amp; sign
+        </a>
+      </p>
+      <p style="color:#71717a; font-size: 13px;">This link is unique to you and expires in ${opts.expiresDays} days. Please don't forward it.</p>
+    `),
+  };
+}
+
+export function completedEmail(opts: {
+  recipientName: string;
+  businessName: string;
+  documentName: string;
+}): { subject: string; html: string } {
+  return {
+    subject: `Signed & complete — ${opts.documentName} (${opts.businessName})`,
+    html: wrapper(`
+      <p>Hello ${escapeHtml(opts.recipientName)},</p>
+      <p>The <strong>${escapeHtml(opts.documentName)}</strong> for
+      <strong>${escapeHtml(opts.businessName)}</strong> has been signed and completed.
+      The executed copy, including its signature certificate, is attached for your records.</p>
     `),
   };
 }
