@@ -30,6 +30,16 @@ export default async function WorksheetReviewPage({
     .order("ts", { ascending: true });
 
   const defs = await loadCustomerFieldDefinitions(supabase);
+  const { data: programs } = await supabase
+    .from("programs")
+    .select("code, name")
+    .eq("active", true)
+    .order("sort_order");
+  const { data: applications } = await supabase
+    .from("applications")
+    .select("id, status, programs(name)")
+    .eq("worksheet_id", id)
+    .order("created_at", { ascending: false });
   const customer = worksheet.customers as unknown as {
     business_name: string;
     contact_name: string | null;
@@ -75,6 +85,13 @@ export default async function WorksheetReviewPage({
           event_type: e.event_type,
           ts: e.ts,
           action: (e.meta as { action?: string })?.action,
+        }))}
+        programs={programs ?? []}
+        applications={(applications ?? []).map((a) => ({
+          id: a.id,
+          status: a.status,
+          programName:
+            (a.programs as unknown as { name: string } | null)?.name ?? "—",
         }))}
       />
     </div>

@@ -12,6 +12,16 @@ insert into programs (org_id, code, name, cash_loading, sort_order) values
   ('00000000-0000-0000-0000-000000000001', 'pl-cl', 'Placement / Cash Loading', true, 3)
 on conflict (code) do nothing;
 
+-- Template rows per program. The two cash-loading programs share one packet
+-- (same storage path). Field maps live in src/lib/pdf/maps until the Phase 4
+-- mapper UI; blank PDFs are uploaded from the admin UI into the templates
+-- bucket at these paths.
+insert into templates (program_id, version, storage_path)
+select p.id, 1, case when p.code = 'mo-ml' then 'blanks/mo-ml-v1.pdf' else 'blanks/cl-v1.pdf' end
+from programs p
+where p.code in ('mo-ml', 'mo-cl', 'pl-cl')
+on conflict (program_id, version) do nothing;
+
 -- ---------------------------------------------------------------------------
 -- Field dictionary (Appendix A)
 -- columns: key, legacy_num, label, section, field_type, required,
