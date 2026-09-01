@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { FieldInput } from "@/components/worksheet/FieldInput";
 import {
@@ -9,6 +11,7 @@ import {
   WorksheetData,
   isFieldVisible,
 } from "@/lib/fields/types";
+import { createApplication } from "../../applications/actions";
 import { reissueWorksheetLink, saveWorksheetReview } from "../actions";
 
 interface EditorProps {
@@ -20,6 +23,8 @@ interface EditorProps {
   initialChangedKeys: string[];
   initialReviewNotes: string;
   events: { event_type: string; ts: string; action?: string }[];
+  programs: { code: string; name: string }[];
+  applications: { id: string; status: string; programName: string }[];
 }
 
 export function AdminWorksheetEditor({
@@ -31,7 +36,11 @@ export function AdminWorksheetEditor({
   initialChangedKeys,
   initialReviewNotes,
   events,
+  programs,
+  applications,
 }: EditorProps) {
+  const router = useRouter();
+  const [programCode, setProgramCode] = useState("");
   const [data, setData] = useState<WorksheetData>(initialData);
   const [reviewNotes, setReviewNotes] = useState(initialReviewNotes);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -187,7 +196,63 @@ export function AdminWorksheetEditor({
         </div>
       </div>
 
-      <aside>
+      <aside className="space-y-8">
+        <div>
+          <h2 className="font-semibold">Application</h2>
+          {applications.length > 0 && (
+            <ul className="mt-2 space-y-1 text-sm">
+              {applications.map((a) => (
+                <li key={a.id}>
+                  <Link href={`/admin/applications/${a.id}`} className="underline">
+                    {a.programName}
+                  </Link>{" "}
+                  <span className="text-xs text-zinc-500">({a.status})</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {(status === "reviewed" || status === "submitted") && (
+            <div className="mt-3 space-y-2">
+              <select
+                className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                value={programCode}
+                onChange={(e) => setProgramCode(e.target.value)}
+              >
+                <option value="">Select ATM program…</option>
+                {programs.map((p) => (
+                  <option key={p.code} value={p.code}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={pending || !programCode}
+                onClick={async () => {
+                  setPending(true);
+                  setMessage(null);
+                  try {
+                    const result = await createApplication({ worksheetId, programCode });
+                    router.push(`/admin/applications/${result.applicationId}`);
+                  } catch (err) {
+                    setMessage(err instanceof Error ? err.message : "Failed");
+                    setPending(false);
+                  }
+                }}
+                className="w-full rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                Create application
+              </button>
+              {status === "submitted" && (
+                <p className="text-xs text-amber-700">
+                  Tip: mark the worksheet reviewed before creating the application.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div>
         <h2 className="font-semibold">Timeline</h2>
         <ol className="mt-3 space-y-2 border-l border-zinc-200 pl-4 text-sm">
           {events.map((e, i) => (
@@ -200,6 +265,7 @@ export function AdminWorksheetEditor({
           ))}
           {events.length === 0 && <li className="text-zinc-400">No events yet.</li>}
         </ol>
+        </div>
       </aside>
     </div>
   );

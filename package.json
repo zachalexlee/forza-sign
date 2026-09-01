@@ -8,12 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "inspect:pdf": "tsx scripts/inspect-pdf.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.112.4",
     "next": "16.3.3",
+    "pdf-lib": "^1.17.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "resend": "^6.25.0",
@@ -28,6 +30,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.3",
     "tailwindcss": "^4",
+    "tsx": "^4.23.13",
     "typescript": "^5",
     "vitest": "^4.1.11"
   }

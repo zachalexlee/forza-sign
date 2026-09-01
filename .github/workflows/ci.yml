@@ -16,6 +16,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # Route types (LayoutProps etc.) are generated, not checked in.
+      - run: npx next typegen
       - run: npx tsc --noEmit
       - run: npx vitest run
       - run: npm run build
