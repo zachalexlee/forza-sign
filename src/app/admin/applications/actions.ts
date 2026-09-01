@@ -1,10 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { regenerateFilledPdf } from "@/lib/applications";
 import { logAuditEvent } from "@/lib/audit";
 import { WorksheetData } from "@/lib/fields/types";
-import { fillPdf } from "@/lib/pdf/fill";
-import { templateMapForProgram } from "@/lib/pdf/maps";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -124,56 +123,15 @@ export async function updateApplicationData(input: {
 }
 
 /**
- * Fill the template PDF from the application data. Returns missing PDF field
- * names (map entries the document doesn't have) so the UI can surface them.
+ * Upload the blank template PDF for a program (until the Phase 4 mapper UI).
+ * Admin-only, mirroring the templates table's admin_write RLS policy, and
+ * scoped to the caller's organization.
  */
-export async function regenerateFilledPdf(
-  applicationId: string
-): Promise<{ missingFields: string[]; filled: boolean }> {
-  const supabase = createAdminClient();
-
-  const { data: application } = await supabase
-    .from("applications")
-    .select("id, org_id, data, programs(code), templates(storage_path)")
-    .eq("id", applicationId)
-    .single();
-  if (!application) throw new Error("Application not found");
-
-  const programCode = (application.programs as unknown as { code: string })?.code;
-  const storagePath = (application.templates as unknown as { storage_path: string | null })
-    ?.storage_path;
-  const map = programCode ? templateMapForProgram(programCode) : undefined;
-  if (!map || !storagePath) return { missingFields: [], filled: false };
-
-  const { data: blank } = await supabase.storage.from("templates").download(storagePath);
-  if (!blank) return { missingFields: [], filled: false }; // blank PDF not uploaded yet
-
-  const result = await fillPdf(await blank.arrayBuffer(), map, {
-    data: application.data as WorksheetData,
-    programCode,
-    sendDate: new Date(),
-  });
-
-  const filledPath = `applications/${applicationId}/filled.pdf`;
-  const { error: uploadError } = await supabase.storage
-    .from("filled")
-    .upload(filledPath, Buffer.from(result.pdfBytes), {
-      contentType: "application/pdf",
-      upsert: true,
-    });
-  if (uploadError) throw new Error(`Could not store filled PDF: ${uploadError.message}`);
-
-  await supabase
-    .from("applications")
-    .update({ filled_pdf_path: filledPath })
-    .eq("id", applicationId);
-
-  return { missingFields: result.missingFields, filled: true };
-}
-
-/** Upload the blank template PDF for a program (until the Phase 4 mapper UI). */
 export async function uploadTemplateBlank(formData: FormData): Promise<void> {
-  await requireStaff();
+  const staff = await requireStaff();
+  if (staff.role !== "admin") {
+    throw new Error("Only admins can replace template PDFs");
+  }
   const supabase = createAdminClient();
 
   const file = formData.get("file");
@@ -185,10 +143,12 @@ export async function uploadTemplateBlank(formData: FormData): Promise<void> {
 
   const { data: template } = await supabase
     .from("templates")
-    .select("id, storage_path")
+    .select("id, storage_path, programs(org_id)")
     .eq("id", templateId)
     .single();
   if (!template?.storage_path) throw new Error("Template not found");
+  const templateOrg = (template.programs as unknown as { org_id: string })?.org_id;
+  if (templateOrg !== staff.orgId) throw new Error("Template not found");
 
   const { error } = await supabase.storage
     .from("templates")

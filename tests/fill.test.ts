@@ -130,6 +130,21 @@ describe("derived rules (Appendix C)", () => {
     expect(resolveDerived("cash_loader_name", ctx("mo-ml", ml))).toBe("Jordan Smith");
   });
 
+  it("W-9 city/state/zip comes from the BANK address, not the business", () => {
+    const data = {
+      ...fixtureData(),
+      "bank.city": "Savannah",
+      "bank.state": "GA",
+      "bank.zip": "31401",
+    };
+    expect(resolveDerived("bank_city_state_zip", ctx("mo-cl", data))).toBe(
+      "Savannah, GA, 31401"
+    );
+    expect(resolveDerived("business_city_state_zip", ctx("mo-cl", data))).toBe(
+      "Atlanta, GA, 30301"
+    );
+  });
+
   it("wireless fee follows the wireless box answer", () => {
     expect(resolveDerived("wireless_fee", ctx("mo-cl"))).toBe("25.95");
     const noWireless = { ...fixtureData(), "install.wireless_box": false };
@@ -175,6 +190,15 @@ describe("map entry resolution", () => {
         ctx("mo-cl")
       )
     ).toBe("3.00");
+  });
+
+  it("LLC classifications check the business-type Other box", () => {
+    const entry = { pdf: "Check Box Other", derived: "w9_class_llc", checkbox: {} };
+    expect(resolveEntry(entry, ctx("mo-cl"))).toBe(true); // llc_s fixture
+    const llcC = { ...fixtureData(), "business.classification": "llc_c" };
+    expect(resolveEntry(entry, ctx("mo-cl", llcC))).toBe(true);
+    const corp = { ...fixtureData(), "business.classification": "corporation" };
+    expect(resolveEntry(entry, ctx("mo-cl", corp))).toBe(false);
   });
 
   it("checkbox equals-matching", () => {

@@ -110,6 +110,13 @@ export function resolveDerived(rule: string, ctx: FillContext): string | boolean
         .filter(Boolean)
         .join(", ");
 
+    // W-9 address must match the BANK account address (#35–38), never the
+    // business location (office manager's rule, Appendix C).
+    case "bank_city_state_zip":
+      return [str(data, "bank.city"), str(data, "bank.state"), str(data, "bank.zip")]
+        .filter(Boolean)
+        .join(", ");
+
     default:
       throw new Error(`Unknown derived rule: ${rule}`);
   }

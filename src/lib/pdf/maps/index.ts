@@ -57,6 +57,7 @@ const processingApplication: MapEntry[] = [
   { pdf: "Check Box Sole Prop", source: "business.classification", checkbox: { equals: "sole_prop" }, note: "verify" },
   { pdf: "Check Box Corp", source: "business.classification", checkbox: { equals: "corporation" }, note: "verify" },
   { pdf: "Check Box Partnership", source: "business.classification", checkbox: { equals: "partnership" }, note: "verify" },
+  { pdf: "Check Box Other", derived: "w9_class_llc", checkbox: {}, note: "verify: LLC (S or C) → Other" },
   { pdf: "New Account", derived: "already_open", checkbox: {}, note: "verify: header checkbox" },
   // Primary owner
   { pdf: "Primary Owner Name", source: "owner.legal_name", note: "verify" }, // #13
@@ -161,7 +162,7 @@ const w9: MapEntry[] = [
   { pdf: "W9 LLC Tax Class", derived: "w9_llc_tax_code", note: "verify: S or C code box" },
   // W-9 address must match the BANK account address (#35-38), not business
   { pdf: "W9 Address", source: "bank.street", note: "verify" },
-  { pdf: "W9 City State Zip", derived: "business_city_state_zip", note: "verify: should be bank city/state/zip — custom rule needed if separate fields" },
+  { pdf: "W9 City State Zip", derived: "bank_city_state_zip", note: "verify: must match bank account address" },
   { pdf: "W9 Date", derived: "send_date_us", note: "verify: sign date at fill time" },
   ...w9DigitBoxes,
 ];
