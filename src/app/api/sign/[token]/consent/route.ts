@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isRateLimited, rateLimitResponse } from "@/lib/rate-limit";
 import { logAuditEvent, requestMeta } from "@/lib/audit";
 import { validateSigningToken } from "@/lib/signing";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -9,6 +10,7 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> }
 ) {
   const { token } = await params;
+  if (isRateLimited(request, "sign_consent", 15)) return rateLimitResponse();
   const result = await validateSigningToken(token);
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: 403 });

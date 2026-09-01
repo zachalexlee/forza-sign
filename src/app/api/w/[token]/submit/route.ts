@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isRateLimited, rateLimitResponse } from "@/lib/rate-limit";
 import { logAuditEvent, requestMeta } from "@/lib/audit";
 import { sendEmail, worksheetSubmittedEmail } from "@/lib/email";
 import { customerWritableKeys, validateWorksheetData } from "@/lib/fields/schema";
@@ -16,6 +17,7 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> }
 ) {
   const { token } = await params;
+  if (isRateLimited(request, "worksheet_submit", 10)) return rateLimitResponse();
   const result = await validateWorksheetToken(token);
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: 403 });

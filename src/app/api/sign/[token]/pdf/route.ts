@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
+import { isRateLimited, rateLimitResponse } from "@/lib/rate-limit";
 import { validateSigningToken } from "@/lib/signing";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** Stream the filled PDF to the authenticated signer's viewer. */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ token: string }> }
 ) {
   const { token } = await params;
+  if (isRateLimited(request, "sign_pdf", 30)) return rateLimitResponse();
   const result = await validateSigningToken(token);
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: 403 });
