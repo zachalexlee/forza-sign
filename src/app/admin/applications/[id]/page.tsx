@@ -18,11 +18,17 @@ export default async function ApplicationPage({
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, status, data, filled_pdf_path, created_at, programs(code, name), templates(id, storage_path), worksheets(id, customers(business_name))"
+      "id, status, data, filled_pdf_path, final_pdf_path, sha256_final, created_at, programs(code, name), templates(id, storage_path), worksheets(id, customers(business_name))"
     )
     .eq("id", id)
     .maybeSingle();
   if (!application) notFound();
+
+  const { data: signers } = await supabase
+    .from("signers")
+    .select("name, email, status, signed_at")
+    .eq("application_id", id)
+    .order("sign_order");
 
   const { data: allDefs } = await supabase
     .from("field_definitions")
@@ -47,7 +53,12 @@ export default async function ApplicationPage({
   // Signed URLs are short-lived; storage buckets are private (build plan §5).
   const admin = createAdminClient();
   let pdfUrl: string | null = null;
-  if (application.filled_pdf_path) {
+  if (application.final_pdf_path) {
+    const { data } = await admin.storage
+      .from("final")
+      .createSignedUrl(application.final_pdf_path, 300);
+    pdfUrl = data?.signedUrl ?? null;
+  } else if (application.filled_pdf_path) {
     const { data } = await admin.storage
       .from("filled")
       .createSignedUrl(application.filled_pdf_path, 300);
@@ -79,6 +90,17 @@ export default async function ApplicationPage({
         officeDefs={officeDefs}
         data={maskSensitiveValues(defs, application.data ?? {})}
         pdfUrl={pdfUrl}
+        sha256Final={application.sha256_final}
+        signers={(signers ?? []).map((s) => ({
+          name: s.name,
+          email: s.email,
+          status: s.status,
+          signedAt: s.signed_at,
+        }))}
+        suggestedSigner={{
+          name: String(application.data?.["owner.legal_name"] ?? ""),
+          email: String(application.data?.["owner.email"] ?? ""),
+        }}
       />
     </div>
   );
