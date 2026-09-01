@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { isRateLimited, rateLimitResponse } from "@/lib/rate-limit";
 import { logAuditEvent, requestMeta } from "@/lib/audit";
 import { completedEmail, sendEmail } from "@/lib/email";
-import { templateMapForProgram } from "@/lib/pdf/maps";
+import { resolveTemplateMap } from "@/lib/pdf/resolve-map";
 import { appendCertificatePage, sha256Hex, stampAndFlatten } from "@/lib/pdf/stamp";
 import { validateSigningToken } from "@/lib/signing";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -51,7 +51,9 @@ export async function POST(
   const meta = requestMeta(request);
   const supabase = createAdminClient();
   const programCode = application.programs?.code;
-  const map = programCode ? templateMapForProgram(programCode) : undefined;
+  const map = programCode
+    ? resolveTemplateMap(application.templates, programCode)
+    : undefined;
   if (!map) return NextResponse.json({ error: "no_template_map" }, { status: 409 });
 
   const { data: filled } = await supabase.storage

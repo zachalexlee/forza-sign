@@ -37,6 +37,9 @@ export default async function AdminLayout({
             <Link href="/admin/customers" className="text-zinc-600 hover:text-zinc-900">
               Customers
             </Link>
+            <Link href="/admin/templates" className="text-zinc-600 hover:text-zinc-900">
+              Templates
+            </Link>
           </nav>
           <span className="text-sm text-zinc-500">{staff.full_name}</span>
         </div>

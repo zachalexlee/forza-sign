@@ -1,6 +1,6 @@
 import { WorksheetData } from "@/lib/fields/types";
 import { fillPdf } from "@/lib/pdf/fill";
-import { templateMapForProgram } from "@/lib/pdf/maps";
+import { resolveTemplateMap } from "@/lib/pdf/resolve-map";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -16,15 +16,21 @@ export async function regenerateFilledPdf(
 
   const { data: application } = await supabase
     .from("applications")
-    .select("id, org_id, data, programs(code), templates(storage_path)")
+    .select(
+      "id, org_id, data, programs(code), templates(storage_path, field_map, signature_placements)"
+    )
     .eq("id", applicationId)
     .single();
   if (!application) throw new Error("Application not found");
 
   const programCode = (application.programs as unknown as { code: string })?.code;
-  const storagePath = (application.templates as unknown as { storage_path: string | null })
-    ?.storage_path;
-  const map = programCode ? templateMapForProgram(programCode) : undefined;
+  const template = application.templates as unknown as {
+    storage_path: string | null;
+    field_map: unknown;
+    signature_placements: unknown;
+  } | null;
+  const storagePath = template?.storage_path;
+  const map = programCode ? resolveTemplateMap(template, programCode) : undefined;
   if (!map || !storagePath) return { missingFields: [], filled: false };
 
   const { data: blank } = await supabase.storage.from("templates").download(storagePath);

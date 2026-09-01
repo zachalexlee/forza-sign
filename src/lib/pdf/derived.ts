@@ -19,6 +19,30 @@ function digitsOf(value: string): string {
   return value.replace(/\D/g, "");
 }
 
+/** Every rule the engine knows — the mapper UI's dropdown source. */
+export const DERIVED_RULE_NAMES = [
+  "send_day",
+  "send_month",
+  "send_year",
+  "send_date_us",
+  "already_open",
+  "opening_soon",
+  "shipping_if_different",
+  "manager_name_title",
+  "cash_loader_name",
+  "w9_tin_ssn",
+  "w9_tin_ein",
+  "w9_class_individual",
+  "w9_class_c_corp",
+  "w9_class_partnership",
+  "w9_class_llc",
+  "w9_llc_tax_code",
+  "wireless_selected",
+  "wireless_fee",
+  "business_city_state_zip",
+  "bank_city_state_zip",
+] as const;
+
 export function resolveDerived(rule: string, ctx: FillContext): string | boolean {
   const { data, sendDate, programCode } = ctx;
 
