@@ -34,6 +34,10 @@ export function isRateLimited(
 
   const current = windows.get(key);
   if (!current || current.resetAt <= now) {
+    // Fail closed at the cap: when purging freed nothing (a flood of
+    // distinct keys within one window), refuse new keys rather than
+    // growing without bound and scanning an ever-larger map.
+    if (!current && windows.size >= MAX_ENTRIES) return true;
     windows.set(key, { count: 1, resetAt: now + WINDOW_MS });
     return false;
   }

@@ -49,8 +49,9 @@ create table storage.objects (id uuid primary key default gen_random_uuid(), buc
 alter table storage.objects enable row level security;
 SQL
 
-$PSQL -f supabase/migrations/00001_init.sql >/dev/null
-$PSQL -f supabase/migrations/00002_worksheet_submission.sql >/dev/null
+for migration in supabase/migrations/*.sql; do
+  $PSQL -f "$migration" >/dev/null
+done
 $PSQL -f supabase/seed.sql >/dev/null
 
 # --- Supabase-like grants (RLS must be the thing doing the gating) --------
@@ -66,7 +67,8 @@ revoke update, delete on audit_events from anon, authenticated;
 -- Fixture: one staff user, one non-staff auth user, one customer + worksheet.
 insert into auth.users (id) values
   ('11111111-1111-1111-1111-111111111111'),
-  ('22222222-2222-2222-2222-222222222222');
+  ('22222222-2222-2222-2222-222222222222'),
+  ('55555555-5555-5555-5555-555555555555');
 insert into staff_users (id, org_id, email, full_name, role)
   values ('11111111-1111-1111-1111-111111111111',
           '00000000-0000-0000-0000-000000000001',
@@ -81,6 +83,24 @@ insert into worksheets (id, org_id, customer_id, data)
 insert into audit_events (org_id, worksheet_id, event_type)
   values ('00000000-0000-0000-0000-000000000001',
           '44444444-4444-4444-4444-444444444444', 'created');
+
+-- Foreign-org fixture: a second organization with its own staff, customer,
+-- worksheet + link. Tenant isolation means org-A staff never see these.
+insert into organizations (id, name)
+  values ('99999999-9999-9999-9999-999999999999', 'Other Org');
+insert into staff_users (id, org_id, email, full_name, role)
+  values ('55555555-5555-5555-5555-555555555555',
+          '99999999-9999-9999-9999-999999999999',
+          'staff@other.test', 'Other Staff', 'admin');
+insert into customers (id, org_id, business_name)
+  values ('66666666-6666-6666-6666-666666666666',
+          '99999999-9999-9999-9999-999999999999', 'Foreign Biz');
+insert into worksheets (id, org_id, customer_id, data)
+  values ('77777777-7777-7777-7777-777777777777',
+          '99999999-9999-9999-9999-999999999999',
+          '66666666-6666-6666-6666-666666666666', '{}');
+insert into worksheet_links (worksheet_id, token_hash, expires_at)
+  values ('77777777-7777-7777-7777-777777777777', 'foreign-hash', now() + interval '1 day');
 SQL
 
 # --- Assertions -----------------------------------------------------------
@@ -116,13 +136,39 @@ begin
   if n <> 0 then raise exception 'FAIL: non-staff auth user can read staff_users'; end if;
   reset role;
 
-  -- 3. staff user CAN read
+  -- 3. staff user CAN read their own org — and ONLY their own org
   set local role authenticated;
   perform set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', true);
   select count(*) into n from worksheets;
-  if n <> 1 then raise exception 'FAIL: staff cannot read worksheets (%)', n; end if;
+  if n <> 1 then raise exception 'FAIL: staff cannot read own worksheets (%)', n; end if;
   select count(*) into n from customers;
-  if n <> 1 then raise exception 'FAIL: staff cannot read customers'; end if;
+  if n <> 1 then raise exception 'FAIL: staff cannot read own customers'; end if;
+  -- Tenant isolation: foreign-org rows must be invisible.
+  select count(*) into n from worksheets where org_id = '99999999-9999-9999-9999-999999999999';
+  if n <> 0 then raise exception 'FAIL: staff can read foreign-org worksheets'; end if;
+  select count(*) into n from customers where org_id = '99999999-9999-9999-9999-999999999999';
+  if n <> 0 then raise exception 'FAIL: staff can read foreign-org customers'; end if;
+  select count(*) into n from organizations where id = '99999999-9999-9999-9999-999999999999';
+  if n <> 0 then raise exception 'FAIL: staff can see foreign organization'; end if;
+  select count(*) into n from staff_users where org_id = '99999999-9999-9999-9999-999999999999';
+  if n <> 0 then raise exception 'FAIL: staff can see foreign staff'; end if;
+  select count(*) into n from worksheet_links where token_hash = 'foreign-hash';
+  if n <> 0 then raise exception 'FAIL: staff can read foreign worksheet_links'; end if;
+  begin
+    insert into customers (org_id, business_name)
+      values ('99999999-9999-9999-9999-999999999999', 'cross-org write');
+    raise exception 'FAIL: staff can write into a foreign org';
+  exception when insufficient_privilege or check_violation then null;
+           when others then if sqlerrm like 'FAIL%' then raise; end if;
+  end;
+
+  -- 3b. the foreign org's staff see their rows, not org A's
+  perform set_config('request.jwt.claim.sub', '55555555-5555-5555-5555-555555555555', true);
+  select count(*) into n from worksheets;
+  if n <> 1 then raise exception 'FAIL: foreign staff cannot read own worksheets'; end if;
+  select count(*) into n from worksheets where org_id = '00000000-0000-0000-0000-000000000001';
+  if n <> 0 then raise exception 'FAIL: foreign staff can read org-A worksheets'; end if;
+  perform set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', true);
 
   -- 4. staff cannot UPDATE/DELETE audit_events (privilege revoke + trigger)
   begin

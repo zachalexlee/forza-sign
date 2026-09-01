@@ -105,6 +105,15 @@ describe("rate limiting on public token routes", () => {
     expect(isRateLimited(req("10.0.0.3"), "bucket_a", 5)).toBe(false);
   });
 
+  it("fails closed when flooded with distinct keys (bounded memory)", () => {
+    // Fill well past the 10k entry cap with unique IPs in one window; new
+    // keys must be refused rather than growing the map without bound.
+    for (let i = 0; i < 10_100; i++) {
+      isRateLimited(req(`10.1.${Math.floor(i / 250)}.${i % 250}`), "flood", 5);
+    }
+    expect(isRateLimited(req("172.16.0.1"), "flood", 5)).toBe(true);
+  });
+
   it("every public token route enforces a limit", () => {
     const routeDirs = [
       "../src/app/api/w/[token]",
