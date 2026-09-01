@@ -116,6 +116,7 @@ export async function reissueWorksheetLink(
     .from("worksheets")
     .select("id, org_id, customers(business_name, email)")
     .eq("id", worksheetId)
+    .eq("org_id", staff.orgId)
     .single();
   if (!worksheet) throw new Error("Worksheet not found");
 
@@ -183,6 +184,7 @@ export async function saveWorksheetReview(input: {
     .from("worksheets")
     .select("id, org_id, data, status")
     .eq("id", input.worksheetId)
+    .eq("org_id", staff.orgId)
     .single();
   if (!worksheet) throw new Error("Worksheet not found");
 

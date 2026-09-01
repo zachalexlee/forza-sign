@@ -20,6 +20,8 @@ jobs:
       - run: npx next typegen
       - run: npx tsc --noEmit
       - run: npx vitest run
+      # RLS + audit-immutability verification against real migrations (§9)
+      - run: bash scripts/test-rls.sh
       - run: npm run build
         env:
           NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
