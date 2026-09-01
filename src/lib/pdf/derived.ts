@@ -41,6 +41,14 @@ export const DERIVED_RULE_NAMES = [
   "wireless_fee",
   "business_city_state_zip",
   "bank_city_state_zip",
+  "owner_home_city_state_zip",
+  "owner_first_name",
+  "owner_last_name",
+  "business_type_label",
+  "business_type_other_label",
+  "tin_is_ein",
+  "tin_is_ssn",
+  "wireless_yes_no",
 ] as const;
 
 export function resolveDerived(rule: string, ctx: FillContext): string | boolean {
@@ -140,6 +148,62 @@ export function resolveDerived(rule: string, ctx: FillContext): string | boolean
       return [str(data, "bank.city"), str(data, "bank.state"), str(data, "bank.zip")]
         .filter(Boolean)
         .join(", ");
+
+    case "owner_home_city_state_zip":
+      return [
+        str(data, "owner.home_city"),
+        str(data, "owner.home_state"),
+        str(data, "owner.home_zip"),
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+    // Source-of-funds form (ML packet) wants the owner name split.
+    case "owner_first_name": {
+      const parts = str(data, "owner.legal_name").trim().split(/\s+/);
+      return parts.length > 1 ? parts.slice(0, -1).join(" ") : parts[0] ?? "";
+    }
+    case "owner_last_name": {
+      const parts = str(data, "owner.legal_name").trim().split(/\s+/);
+      return parts.length > 1 ? parts[parts.length - 1] : "";
+    }
+
+    // Human-readable classification for "Business Type ____" lines.
+    case "business_type_label":
+      return (
+        {
+          llc_s: "LLC - S Corp",
+          llc_c: "LLC - C Corp",
+          corporation: "Corporation",
+          partnership: "Partnership",
+          sole_prop: "Sole Proprietor",
+        }[str(data, "business.classification")] ?? ""
+      );
+    // The application's business-type row has no LLC checkbox — LLCs check
+    // "Other" and this label goes on the Other line.
+    case "business_type_other_label":
+      return data["business.classification"] === "llc_s"
+        ? "LLC - S Corp"
+        : data["business.classification"] === "llc_c"
+          ? "LLC - C Corp"
+          : "";
+
+    // TIN type checkboxes (source-of-funds form).
+    case "tin_is_ssn":
+      return data["business.classification"] === "sole_prop";
+    case "tin_is_ein":
+      return (
+        !!data["business.classification"] &&
+        data["business.classification"] !== "sole_prop"
+      );
+
+    // The cover sheet's wireless question is a written answer, not a checkbox.
+    case "wireless_yes_no":
+      return data["install.wireless_box"] === true
+        ? "Yes"
+        : data["install.wireless_box"] === false
+          ? "No"
+          : "";
 
     default:
       throw new Error(`Unknown derived rule: ${rule}`);
