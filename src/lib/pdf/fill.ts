@@ -1,4 +1,4 @@
-import { PDFCheckBox, PDFDocument, PDFTextField } from "pdf-lib";
+import { PDFCheckBox, PDFDocument, PDFTextField, StandardFonts } from "pdf-lib";
 import { decryptField, isEncrypted } from "@/lib/crypto";
 import { resolveDerived } from "./derived";
 import { FillContext, FillResult, MapEntry, TemplateMap, Transform } from "./types";
@@ -71,12 +71,32 @@ export async function fillPdf(
 ): Promise<FillResult> {
   const doc = await PDFDocument.load(blankPdf);
   const form = doc.getForm();
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
   const missingFields: string[] = [];
   const applied: Record<string, string | boolean> = {};
 
   for (const entry of map.fields) {
     const value = resolveEntry(entry, ctx);
     if (value === undefined || value === "") continue;
+
+    // Coordinate entries draw text directly — for blanks without a form field.
+    if (entry.coord) {
+      if (value === false) continue; // unchecked checkbox-style entry: draw nothing
+      const pageIndex = entry.coord.page - 1;
+      if (pageIndex < 0 || pageIndex >= doc.getPageCount()) {
+        missingFields.push(entry.pdf);
+        continue;
+      }
+      const text = value === true ? "X" : String(value);
+      doc.getPage(pageIndex).drawText(text, {
+        x: entry.coord.x,
+        y: entry.coord.y,
+        size: entry.coord.size ?? 10,
+        font: helv,
+      });
+      applied[entry.pdf] = text;
+      continue;
+    }
 
     let field;
     try {

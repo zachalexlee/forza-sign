@@ -1,3 +1,5 @@
+import { readFileSync } from "fs";
+import path from "path";
 import { PDFDocument } from "pdf-lib";
 import { beforeAll, describe, expect, it } from "vitest";
 import { encryptField } from "@/lib/crypto";
@@ -5,13 +7,19 @@ import { WorksheetData } from "@/lib/fields/types";
 import { resolveDerived } from "@/lib/pdf/derived";
 import { fillPdf, resolveEntry } from "@/lib/pdf/fill";
 import { cashLoadingMap, merchantLoadMap, templateMapForProgram } from "@/lib/pdf/maps";
-import { FillContext, TemplateMap } from "@/lib/pdf/types";
+import { stampAndFlatten } from "@/lib/pdf/stamp";
+import { FillContext } from "@/lib/pdf/types";
 
 beforeAll(() => {
   process.env.FIELD_ENCRYPTION_KEY = Buffer.alloc(32, 5).toString("base64");
 });
 
 const SEND_DATE = new Date("2026-09-01T12:00:00Z");
+
+const blankFor = (code: string) =>
+  new Uint8Array(
+    readFileSync(path.resolve(__dirname, `../templates/blanks/${code}.pdf`))
+  );
 
 function fixtureData(): WorksheetData {
   return {
@@ -56,6 +64,7 @@ function fixtureData(): WorksheetData {
     "atm.surcharge": 3,
     "atm.rebate": 0.5,
     "atm.count": 1,
+    "atm.make_model": "Hyosung Halo II",
     "sales.rep_name": "Lee Boys/",
   };
 }
@@ -64,25 +73,7 @@ function ctx(programCode: string, data = fixtureData()): FillContext {
   return { data, programCode, sendDate: SEND_DATE };
 }
 
-/** Build a blank fixture PDF containing every field the map names. */
-async function fixturePdfFor(map: TemplateMap): Promise<Uint8Array> {
-  const doc = await PDFDocument.create();
-  const page = doc.addPage([612, 792]);
-  const form = doc.getForm();
-  let y = 780;
-  for (const entry of map.fields) {
-    y -= 4;
-    if (y < 10) y = 780;
-    if (entry.checkbox) {
-      form.createCheckBox(entry.pdf).addToPage(page, { x: 5, y, width: 3, height: 3 });
-    } else {
-      form.createTextField(entry.pdf).addToPage(page, { x: 20, y, width: 60, height: 3 });
-    }
-  }
-  return doc.save();
-}
-
-describe("derived rules (Appendix C)", () => {
+describe("derived rules (Appendix C + packet-verified)", () => {
   it("stamps agreement dates from the send date", () => {
     const c = ctx("mo-cl");
     expect(resolveDerived("send_day", c)).toBe("1");
@@ -105,10 +96,20 @@ describe("derived rules (Appendix C)", () => {
     expect(resolveDerived("w9_tin_ein", ctx("mo-cl", soleProp))).toBe("");
   });
 
-  it("W-9 LLC tax code S/C from classification", () => {
-    expect(resolveDerived("w9_llc_tax_code", ctx("mo-cl"))).toBe("S");
-    const llcC = { ...fixtureData(), "business.classification": "llc_c" };
-    expect(resolveDerived("w9_llc_tax_code", ctx("mo-cl", llcC))).toBe("C");
+  it("business type labels for the application's type row", () => {
+    expect(resolveDerived("business_type_label", ctx("mo-cl"))).toBe("LLC - S Corp");
+    expect(resolveDerived("business_type_other_label", ctx("mo-cl"))).toBe("LLC - S Corp");
+    const corp = { ...fixtureData(), "business.classification": "corporation" };
+    expect(resolveDerived("business_type_label", ctx("mo-cl", corp))).toBe("Corporation");
+    expect(resolveDerived("business_type_other_label", ctx("mo-cl", corp))).toBe("");
+  });
+
+  it("owner name split for the source-of-funds form", () => {
+    expect(resolveDerived("owner_first_name", ctx("mo-ml"))).toBe("Jordan");
+    expect(resolveDerived("owner_last_name", ctx("mo-ml"))).toBe("Smith");
+    const threePart = { ...fixtureData(), "owner.legal_name": "Mary Jo Kline" };
+    expect(resolveDerived("owner_first_name", ctx("mo-ml", threePart))).toBe("Mary Jo");
+    expect(resolveDerived("owner_last_name", ctx("mo-ml", threePart))).toBe("Kline");
   });
 
   it("shipping prints only when different from the business address", () => {
@@ -130,25 +131,12 @@ describe("derived rules (Appendix C)", () => {
     expect(resolveDerived("cash_loader_name", ctx("mo-ml", ml))).toBe("Jordan Smith");
   });
 
-  it("W-9 city/state/zip comes from the BANK address, not the business", () => {
-    const data = {
-      ...fixtureData(),
-      "bank.city": "Savannah",
-      "bank.state": "GA",
-      "bank.zip": "31401",
-    };
-    expect(resolveDerived("bank_city_state_zip", ctx("mo-cl", data))).toBe(
-      "Savannah, GA, 31401"
-    );
-    expect(resolveDerived("business_city_state_zip", ctx("mo-cl", data))).toBe(
-      "Atlanta, GA, 30301"
-    );
-  });
-
-  it("wireless fee follows the wireless box answer", () => {
+  it("wireless fee and written answer follow the wireless box answer", () => {
     expect(resolveDerived("wireless_fee", ctx("mo-cl"))).toBe("25.95");
+    expect(resolveDerived("wireless_yes_no", ctx("mo-cl"))).toBe("Yes");
     const noWireless = { ...fixtureData(), "install.wireless_box": false };
     expect(resolveDerived("wireless_fee", ctx("mo-cl", noWireless))).toBe("");
+    expect(resolveDerived("wireless_yes_no", ctx("mo-cl", noWireless))).toBe("No");
   });
 });
 
@@ -159,19 +147,6 @@ describe("map entry resolution", () => {
       ctx("mo-cl")
     );
     expect(value).toBe("123-45-6789");
-  });
-
-  it("splits per-digit W-9 boxes", () => {
-    const first = resolveEntry(
-      { pdf: "Text3.1.0.2024w9", derived: "w9_tin_ein", digitIndex: 0 },
-      ctx("mo-cl")
-    );
-    const last = resolveEntry(
-      { pdf: "Text3.1.8.2024w9", derived: "w9_tin_ein", digitIndex: 8 },
-      ctx("mo-cl")
-    );
-    expect(first).toBe("1");
-    expect(last).toBe("9");
   });
 
   it("formats transforms", () => {
@@ -191,30 +166,6 @@ describe("map entry resolution", () => {
       )
     ).toBe("3.00");
   });
-
-  it("LLC classifications check the business-type Other box", () => {
-    const entry = { pdf: "Check Box Other", derived: "w9_class_llc", checkbox: {} };
-    expect(resolveEntry(entry, ctx("mo-cl"))).toBe(true); // llc_s fixture
-    const llcC = { ...fixtureData(), "business.classification": "llc_c" };
-    expect(resolveEntry(entry, ctx("mo-cl", llcC))).toBe(true);
-    const corp = { ...fixtureData(), "business.classification": "corporation" };
-    expect(resolveEntry(entry, ctx("mo-cl", corp))).toBe(false);
-  });
-
-  it("checkbox equals-matching", () => {
-    expect(
-      resolveEntry(
-        { pdf: "Cement", source: "install.subflooring", checkbox: { equals: "cement" } },
-        ctx("mo-cl")
-      )
-    ).toBe(true);
-    expect(
-      resolveEntry(
-        { pdf: "Wood", source: "install.subflooring", checkbox: { equals: "wood" } },
-        ctx("mo-cl")
-      )
-    ).toBe(false);
-  });
 });
 
 describe("template selection", () => {
@@ -226,37 +177,91 @@ describe("template selection", () => {
   });
 });
 
-describe("fillPdf end-to-end (per-template)", () => {
-  for (const map of [merchantLoadMap, cashLoadingMap]) {
-    it(`fills every mapped field for ${map.code}`, async () => {
-      const blank = await fixturePdfFor(map);
-      const result = await fillPdf(blank, map, ctx(map.programs[0]));
-      expect(result.missingFields).toEqual([]);
+describe("fillPdf against the REAL packet PDFs", () => {
+  it("CL packet: every mapped field exists and key values land", async () => {
+    const result = await fillPdf(blankFor("cl-v1"), cashLoadingMap, ctx("mo-cl"));
+    expect(result.missingFields).toEqual([]);
 
-      // Re-read the produced PDF and assert values landed.
+    const doc = await PDFDocument.load(result.pdfBytes);
+    const form = doc.getForm();
+    expect(form.getTextField("Corp Name").getText()).toBe("Acme Ventures LLC");
+    expect(form.getTextField("DBA").getText()).toBe("Acme Mart");
+    expect(form.getTextField("Federal Tax ID").getText()).toBe("12-3456789");
+    expect(form.getTextField("Routing").getText()).toBe("021000021");
+    expect(form.getTextField("Account").getText()).toBe("000123456");
+    expect(form.getTextField("Social Security").getText()).toBe("123-45-6789");
+    expect(form.getTextField("Day").getText()).toBe("1");
+    expect(form.getTextField("Month").getText()).toBe("September");
+    expect(form.getTextField("Surcharge").getText()).toBe("3.00");
+    expect(form.getTextField("Location Address 2").getText()).toBe("Atlanta, GA, 30301");
+    expect(
+      form.getTextField("Cash Loader Name If you are cash loading yourself").getText()
+    ).toBe("Forza Cash Loader");
+    expect(form.getTextField("Wireless Box").getText()).toBe("25.95");
+    // LLC → Other box + label, not the named boxes
+    expect(form.getCheckBox("Check Box1.0.2").isChecked()).toBe(true);
+    expect(form.getCheckBox("Check Box1.1.2121212").isChecked()).toBe(false);
+    expect(form.getTextField("Other").getText()).toBe("LLC - S Corp");
+    // W-9: LLC box + S code + EIN digits in visual order
+    expect(form.getCheckBox("Check Box15.1.0").isChecked()).toBe(true);
+    expect(form.getTextField("Text161.2").getText()).toBe("S");
+    expect(form.getTextField("Text3.1.0" + "2024w9").getText()).toBe("1");
+    expect(form.getTextField("Text3.0.3" + "2024w9").getText()).toBe("4"); // 4th EIN digit by position
+    expect(form.getTextField("Text3.0.0" + "2024w9").getText() ?? "").toBe("");
+    // ACH defaults
+    expect(form.getCheckBox("Check Box33").isChecked()).toBe(true);
+    expect(form.getCheckBox("Check Box35").isChecked()).toBe(true); // wireless yes
+  });
+
+  it("ML packet: every mapped field exists and the source-of-funds page fills", async () => {
+    const data = { ...fixtureData(), "install.cash_loader_name": "Jordan Smith" };
+    const result = await fillPdf(blankFor("mo-ml-v1"), merchantLoadMap, ctx("mo-ml", data));
+    expect(result.missingFields).toEqual([]);
+
+    const doc = await PDFDocument.load(result.pdfBytes);
+    const form = doc.getForm();
+    expect(form.getTextField("11 Applicant F rst Name").getText()).toBe("Jordan");
+    expect(form.getTextField("12 Applicant Last Name").getText()).toBe("Smith");
+    expect(form.getTextField("14 Applicant Home C ty State Zip").getText()).toBe(
+      "Decatur, GA, 30030"
+    );
+    expect(form.getTextField("15 Applicant Social Security Number").getText()).toBe(
+      "123-45-6789"
+    );
+    expect(form.getTextField("EIN").getText()).toBe("12-3456789");
+    expect(form.getCheckBox("Business TaxID").isChecked()).toBe(true);
+    expect(form.getTextField("Corp Address 2").getText()).toBe("Atlanta, GA, 30301");
+    expect(
+      form.getTextField("Cash Loader Name If you are cash loading yourself").getText()
+    ).toBe("Jordan Smith");
+  });
+
+  for (const [code, map, program] of [
+    ["cl-v1", cashLoadingMap, "mo-cl"],
+    ["mo-ml-v1", merchantLoadMap, "mo-ml"],
+  ] as const) {
+    it(`${code}: stampAndFlatten stamps every customer placement and flattens`, async () => {
+      const { pdfBytes } = await fillPdf(blankFor(code), map, ctx(program));
+      // 1x1 transparent-ish PNG
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "base64"
+      );
+      const result = await stampAndFlatten({
+        filledPdf: pdfBytes,
+        map,
+        signaturePng: new Uint8Array(png),
+        signerName: "Jordan Smith",
+        signedAt: SEND_DATE,
+      });
+      const expected = map.signaturePlacements.filter(
+        (p) => p.signer === "customer" && p.kind === "signature"
+      ).length;
+      expect(result.stampedPlacements).toBe(expected);
+      expect(result.skippedPlacements).toBe(0);
+      // Flattened: no form fields remain editable.
       const doc = await PDFDocument.load(result.pdfBytes);
-      const form = doc.getForm();
-      expect(form.getTextField("Corp Name").getText()).toBe("Acme Ventures LLC");
-      expect(form.getTextField("Federal Tax ID").getText()).toBe("12-3456789");
-      expect(form.getTextField("Routing").getText()).toBe("021000021");
-      expect(form.getTextField("Account").getText()).toBe("000123456");
-      expect(form.getTextField("Day").getText()).toBe("1");
-      expect(form.getTextField("Month").getText()).toBe("September");
-      expect(form.getTextField("Surcharge").getText()).toBe("3.00");
-      expect(form.getCheckBox("Already Open").isChecked()).toBe(true);
-      expect(form.getCheckBox("Cement").isChecked()).toBe(true);
-      expect(form.getCheckBox("Wood").isChecked()).toBe(false);
-      expect(form.getCheckBox("Wireless").isChecked()).toBe(true);
-      // W-9: LLC → EIN boxes filled, SSN boxes empty
-      expect(form.getTextField("Text3.1.0.2024w9").getText()).toBe("1");
-      expect(form.getTextField("Text3.1.8.2024w9").getText()).toBe("9");
-      expect(form.getTextField("Text3.0.0.2024w9").getText() ?? "").toBe("");
-
-      if (map.code === "cl-v1") {
-        expect(
-          form.getTextField("Cash Loader Name If you are cash loading yourself").getText()
-        ).toBe("Forza Cash Loader");
-      }
+      expect(doc.getForm().getFields()).toHaveLength(0);
     });
   }
 

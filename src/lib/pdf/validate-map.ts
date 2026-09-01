@@ -86,6 +86,29 @@ export function validateMapEntries(
       entry.checkbox = equals === undefined ? {} : { equals };
     }
 
+    if (e.coord !== undefined) {
+      const c = e.coord as { page?: unknown; x?: unknown; y?: unknown; size?: unknown };
+      const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+      if (
+        typeof e.coord !== "object" ||
+        e.coord === null ||
+        !num(c.page) ||
+        !num(c.x) ||
+        !num(c.y) ||
+        (c.size !== undefined && !num(c.size)) ||
+        (c.page as number) < 1
+      ) {
+        errors.push(`${pdf}: coord must be {page>=1, x, y, size?} numbers`);
+        continue;
+      }
+      entry.coord = {
+        page: c.page as number,
+        x: c.x as number,
+        y: c.y as number,
+        ...(c.size !== undefined ? { size: c.size as number } : {}),
+      };
+    }
+
     if (e.digitIndex !== undefined) {
       if (
         typeof e.digitIndex !== "number" ||

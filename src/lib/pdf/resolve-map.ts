@@ -38,7 +38,10 @@ function isMapEntryArray(v: unknown): v is MapEntry[] {
  */
 export function hasStampableCustomerSignature(map: TemplateMap): boolean {
   return map.signaturePlacements.some(
-    (p) => p.signer === "customer" && p.kind === "signature" && !!p.pdf
+    (p) =>
+      p.signer === "customer" &&
+      p.kind === "signature" &&
+      (!!p.pdf || (p.x !== undefined && p.y !== undefined))
   );
 }
 

@@ -46,6 +46,17 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
   for (const placement of input.map.signaturePlacements) {
     if (placement.signer !== "customer" || placement.kind !== "signature") continue;
     if (!placement.pdf) {
+      // Signature lines with no AcroForm field use explicit coordinates.
+      if (placement.x !== undefined && placement.y !== undefined) {
+        const pageIndex = placement.page - 1;
+        if (pageIndex >= 0 && pageIndex < doc.getPageCount()) {
+          targets.push({
+            pageIndex,
+            rect: { x: placement.x, y: placement.y, width: 180, height: 24 },
+          });
+          continue;
+        }
+      }
       skipped += 1;
       continue;
     }

@@ -29,6 +29,13 @@ export interface MapEntry {
    * resolved value's digits.
    */
   digitIndex?: number;
+  /**
+   * Coordinate fallback for blanks with no AcroForm field (e.g. the cover
+   * sheet's wireless question): draw the resolved value as text at this
+   * position instead of filling a form field. `pdf` stays as the entry's
+   * unique label. A checkbox-style entry draws "X" when it resolves true.
+   */
+  coord?: { page: number; x: number; y: number; size?: number };
   /** Human note for the mapper UI / debugging */
   note?: string;
 }
@@ -48,7 +55,11 @@ export interface TemplateMap {
   signaturePlacements: {
     kind: "signature" | "initials" | "date";
     signer: "customer" | "forza";
+    /** AcroForm field whose widget rectangle hosts the stamp… */
     pdf?: string;
+    /** …or explicit page coordinates for signature lines with no field. */
+    x?: number;
+    y?: number;
     page: number;
     note?: string;
   }[];

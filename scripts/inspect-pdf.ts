@@ -28,7 +28,8 @@ async function main() {
   const maps = code ? templateMaps.filter((m) => m.code === code) : templateMaps;
   const names = new Set(fields.map((f) => f.name));
   for (const map of maps) {
-    const mapped = new Set(map.fields.map((e) => e.pdf));
+    // coord entries draw text at coordinates — they never match a form field.
+    const mapped = new Set(map.fields.filter((e) => !e.coord).map((e) => e.pdf));
     const missing = [...mapped].filter((n) => !names.has(n));
     const unmapped = [...names].filter((n) => !mapped.has(n));
     console.log(`\n=== ${map.code} (${map.name}) ===`);
