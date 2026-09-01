@@ -39,7 +39,9 @@ export async function saveTemplateMap(input: {
 
   const { error } = await supabase
     .from("templates")
-    .update({ field_map: entries })
+    // 'custom' marks this mapping as office-edited: npm run sync:maps will
+    // never overwrite it with repo-map updates.
+    .update({ field_map: entries, map_source: "custom" })
     .eq("id", input.templateId);
   if (error) throw new Error(`Save failed: ${error.message}`);
 

@@ -185,6 +185,14 @@ describe("fillPdf against the REAL packet PDFs", () => {
     const doc = await PDFDocument.load(result.pdfBytes);
     const form = doc.getForm();
     expect(form.getTextField("Corp Name").getText()).toBe("Acme Ventures LLC");
+    // Shared field carries the BANK ACCOUNT name (#32) per the ACH/W-9 rule.
+    const differentAccount = await fillPdf(
+      blankFor("cl-v1"),
+      cashLoadingMap,
+      ctx("mo-cl", { ...fixtureData(), "bank.account_name": "Acme Holdings Inc" })
+    );
+    const diffForm = (await PDFDocument.load(differentAccount.pdfBytes)).getForm();
+    expect(diffForm.getTextField("Corp Name").getText()).toBe("Acme Holdings Inc");
     expect(form.getTextField("DBA").getText()).toBe("Acme Mart");
     expect(form.getTextField("Federal Tax ID").getText()).toBe("12-3456789");
     expect(form.getTextField("Routing").getText()).toBe("021000021");

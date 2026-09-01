@@ -12,7 +12,8 @@ import { MapEntry, TemplateMap } from "../types";
  *    Sharing also forces one choice where the build plan wanted different
  *    values per page: "Corp Name" serves Corporate Name (p2), ATM Operator +
  *    Name on Account (ACH), W-9 line 1, Depository Name (PO), and Schedule A
- *    Account Name → mapped to business.legal_name. "Corp Address"/City/
+ *    Account Name → mapped to bank.account_name (#32), which the dictionary
+ *    designates for the ACH/W-9/depository locations. "Corp Address"/City/
  *    State/Zip serve the corporate address AND the ACH/W-9 bank-account
  *    address → mapped to bank.* per the office rule ("Exhibit 3 and W-9 must
  *    match data on bank account", printed on the ACH form itself). The
@@ -23,6 +24,14 @@ import { MapEntry, TemplateMap } from "../types";
  *    entries and coordinate signature placements.
  */
 
+/**
+ * Bump when the in-repo maps change: `npm run sync:maps` re-seeds any
+ * template row whose stored map came from the repo (map_source 'repo' or
+ * legacy NULL) and is older than this. Office-edited maps ('custom') are
+ * never auto-updated.
+ */
+export const MAP_VERSION = 2;
+
 // ---------------------------------------------------------------------------
 // Shared fields — identical names in both packets (cover sheet, application,
 // processing agreement, ACH, W-9 TIN boxes, purchase order).
@@ -31,7 +40,7 @@ const shared: MapEntry[] = [
   // Cover sheet (p1)
   { pdf: "Open Date", source: "business.open_date", transform: "date_us" }, // #1
   { pdf: "Already Open", derived: "already_open", note: "text blank; prints Yes when open" },
-  { pdf: "Corp Name", source: "business.legal_name", note: "shared: corporate name, ATM Operator, W-9 line 1, depository, Schedule A" }, // #2
+  { pdf: "Corp Name", source: "bank.account_name", note: "shared: corporate name, ATM Operator, W-9 line 1, name on account, depository, Schedule A — dictionary #32 feeds the ACH/W-9/depository widgets, which outnumber the corporate-name one; account name ≈ legal name for these merchants and the office can override" }, // #32
   { pdf: "DBA", source: "business.dba" }, // #5
   { pdf: "Owners Name", source: "owner.legal_name", note: "shared: owner, print-name blocks, ACH contact" }, // #13
   { pdf: "Owners Cell Phone", source: "owner.cell_phone", transform: "phone_us" }, // #18
