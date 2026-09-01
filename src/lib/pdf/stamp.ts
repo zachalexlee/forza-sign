@@ -36,46 +36,46 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
   const png = await doc.embedPng(input.signaturePng);
   const helv = await doc.embedFont(StandardFonts.Helvetica);
 
-  let stamped = 0;
   let skipped = 0;
 
+  // Pass 1: capture widget rectangles + host pages while the form still
+  // exists. Drawing must wait until after flatten(), which appends field
+  // appearance streams to the page content — anything drawn earlier can be
+  // covered by an opaque field background.
+  const targets: { pageIndex: number; rect: { x: number; y: number; width: number; height: number } }[] = [];
   for (const placement of input.map.signaturePlacements) {
     if (placement.signer !== "customer" || placement.kind !== "signature") continue;
     if (!placement.pdf) {
       skipped += 1;
       continue;
     }
-
-    let rect: { x: number; y: number; width: number; height: number } | null = null;
-    let pageIndex = -1;
     try {
       const field = form.getField(placement.pdf);
       const widget = field.acroField.getWidgets()[0];
-      const r = widget.getRectangle();
-      rect = r;
-      // Find which page hosts this widget.
+      const rect = widget.getRectangle();
       const ref = widget.P();
-      pageIndex = doc.getPages().findIndex((p) => p.ref === ref);
+      let pageIndex = doc.getPages().findIndex((p) => p.ref === ref);
       if (pageIndex === -1 && placement.page) pageIndex = placement.page - 1;
+      if (pageIndex < 0 || pageIndex >= doc.getPageCount()) {
+        skipped += 1;
+        continue;
+      }
+      targets.push({ pageIndex, rect });
     } catch {
       skipped += 1;
-      continue;
     }
-    if (!rect || pageIndex < 0 || pageIndex >= doc.getPageCount()) {
-      skipped += 1;
-      continue;
-    }
+  }
 
+  // Pass 2: flatten — form fields become static page content (§7.4).
+  form.flatten();
+
+  // Pass 3: draw signatures + dates on top of the flattened content.
+  for (const { pageIndex, rect } of targets) {
     const page = doc.getPage(pageIndex);
     const height = Math.max(rect.height, 18);
     const scale = height / png.height;
     const width = Math.min(png.width * scale, rect.width || 160);
-    page.drawImage(png, {
-      x: rect.x,
-      y: rect.y,
-      width,
-      height,
-    });
+    page.drawImage(png, { x: rect.x, y: rect.y, width, height });
     page.drawText(input.signedAt.toLocaleDateString("en-US"), {
       x: rect.x + width + 8,
       y: rect.y + 2,
@@ -83,15 +83,11 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
       font: helv,
       color: rgb(0.2, 0.2, 0.2),
     });
-    stamped += 1;
   }
-
-  // Flatten: form fields become static page content (integrity, §7.4).
-  form.flatten();
 
   return {
     pdfBytes: await doc.save(),
-    stampedPlacements: stamped,
+    stampedPlacements: targets.length,
     skippedPlacements: skipped,
   };
 }

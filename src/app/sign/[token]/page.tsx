@@ -36,6 +36,36 @@ export default async function SigningPage({
   const { token } = await params;
   const result = await validateSigningToken(token);
 
+  // A completed flow stays useful: the link becomes a download page for the
+  // executed copy (retention & access, build plan §7.5).
+  if (!result.ok && result.reason === "already_signed") {
+    let downloadUrl: string | null = null;
+    if (result.application.final_pdf_path) {
+      const supabase = createAdminClient();
+      const { data } = await supabase.storage
+        .from("final")
+        .createSignedUrl(result.application.final_pdf_path, 3600);
+      downloadUrl = data?.signedUrl ?? null;
+    }
+    return (
+      <main className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center p-8 text-center">
+        <h1 className="text-xl font-semibold">Document signed ✓</h1>
+        <p className="mt-3 text-sm text-zinc-600">
+          This document has been signed and completed. You can download your
+          executed copy (including its signature certificate) below.
+        </p>
+        {downloadUrl && (
+          <a
+            href={downloadUrl}
+            className="mt-5 rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white"
+          >
+            Download executed copy
+          </a>
+        )}
+      </main>
+    );
+  }
+
   if (!result.ok) {
     const msg = CLOSED_MESSAGES[result.reason];
     return (

@@ -62,6 +62,15 @@ export async function GET(request: Request) {
     if (lastReminder && lastReminder.ts > cutoff) continue;
 
     // Rotate the token: fresh link in the reminder, old link invalidated.
+    // If the provider rejects the email, restore the old token so the
+    // signer's original link keeps working and no reminder is recorded.
+    const { data: current } = await supabase
+      .from("signers")
+      .select("token_hash, token_expires_at")
+      .eq("id", signer.id)
+      .single();
+    if (!current) continue;
+
     const { token, hash } = generateToken();
     const { error: rotateError } = await supabase
       .from("signers")
@@ -83,13 +92,25 @@ export async function GET(request: Request) {
       expiresDays: SIGNING_TOKEN_TTL_DAYS,
       reminder: true,
     });
-    await sendEmail({
+    const delivery = await sendEmail({
       to: signer.email,
       ...email,
       template: "signing_reminder",
       org_id: application.org_id,
       application_id: application.id,
     });
+
+    if (!delivery.ok) {
+      await supabase
+        .from("signers")
+        .update({
+          token_hash: current.token_hash,
+          token_expires_at: current.token_expires_at,
+        })
+        .eq("id", signer.id);
+      continue;
+    }
+
     await logAuditEvent({
       event_type: "reminder_sent",
       org_id: application.org_id,

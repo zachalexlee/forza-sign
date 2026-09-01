@@ -18,7 +18,14 @@ interface SendEmailInput {
   attachments?: { filename: string; content: Buffer }[];
 }
 
-export async function sendEmail(input: SendEmailInput): Promise<void> {
+/**
+ * Returns ok=false when the provider rejected the send (callers that took
+ * irreversible steps for this email, like token rotation, must roll back).
+ * A skipped send with no API key counts as ok so local flows still work.
+ */
+export async function sendEmail(
+  input: SendEmailInput
+): Promise<{ ok: boolean; status: string }> {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.EMAIL_FROM ?? "Forza Sign <onboarding@resend.dev>";
 
@@ -60,6 +67,8 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
     provider_message_id: providerMessageId,
     status,
   });
+
+  return { ok: !status.startsWith("error"), status };
 }
 
 const wrapper = (body: string) => `

@@ -27,7 +27,14 @@ export type SigningValidation =
   | { ok: true; signer: SignerRow; application: SigningApplication }
   | {
       ok: false;
-      reason: "not_found" | "expired" | "voided" | "already_signed" | "declined";
+      reason: "not_found" | "expired" | "voided" | "declined";
+    }
+  | {
+      /* Completed flows keep working as a retention/download view (§7.5). */
+      ok: false;
+      reason: "already_signed";
+      signer: SignerRow;
+      application: SigningApplication;
     };
 
 /** Resolve a signing token; reject expired/voided/finished flows (§9). */
@@ -59,9 +66,13 @@ export async function validateSigningToken(token: string): Promise<SigningValida
     .maybeSingle();
   if (!application) return { ok: false, reason: "not_found" };
   if (application.status === "voided") return { ok: false, reason: "voided" };
-  // Signed-but-not-yet-completed still shows the completion screen.
   if (signer.status === "signed" || application.status === "completed") {
-    return { ok: false, reason: "already_signed" };
+    return {
+      ok: false,
+      reason: "already_signed",
+      signer: signer as SignerRow,
+      application: application as unknown as SigningApplication,
+    };
   }
 
   return {

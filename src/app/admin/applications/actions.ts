@@ -25,6 +25,7 @@ export async function createApplication(input: {
     .from("worksheets")
     .select("id, org_id, data, status")
     .eq("id", input.worksheetId)
+    .eq("org_id", staff.orgId)
     .single();
   if (!worksheet) throw new Error("Worksheet not found");
   if (worksheet.status !== "reviewed" && worksheet.status !== "submitted") {
@@ -101,6 +102,7 @@ export async function updateApplicationData(input: {
     .from("applications")
     .select("id, org_id, data, status")
     .eq("id", input.applicationId)
+    .eq("org_id", staff.orgId)
     .single();
   if (!application) throw new Error("Application not found");
   if (application.status !== "draft") {
@@ -187,6 +189,7 @@ export async function sendForSignature(input: {
       "id, org_id, status, filled_pdf_path, programs(name), worksheets(customers(business_name))"
     )
     .eq("id", input.applicationId)
+    .eq("org_id", staff.orgId)
     .single();
   if (!application) throw new Error("Application not found");
   if (application.status !== "draft") throw new Error("Application already sent");
@@ -260,6 +263,7 @@ export async function voidApplication(applicationId: string): Promise<void> {
     .from("applications")
     .select("id, org_id, status")
     .eq("id", applicationId)
+    .eq("org_id", staff.orgId)
     .single();
   if (!application) throw new Error("Application not found");
   if (application.status === "completed") {
@@ -298,6 +302,7 @@ export async function reviseAndResend(
     .from("applications")
     .select("id, org_id, worksheet_id, program_id, template_id, data, status")
     .eq("id", applicationId)
+    .eq("org_id", staff.orgId)
     .single();
   if (!old) throw new Error("Application not found");
 

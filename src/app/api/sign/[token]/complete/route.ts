@@ -93,6 +93,18 @@ export async function POST(
     },
   });
 
+  // Record completion BEFORE rendering the certificate so the executed
+  // copy's audit trail includes its own final lifecycle event.
+  const finalPath = `applications/${application.id}/executed.pdf`;
+  await logAuditEvent({
+    event_type: "completed",
+    org_id: application.org_id,
+    application_id: application.id,
+    signer_id: signer.id,
+    ...meta,
+    meta: { final_pdf: finalPath, sha256 },
+  });
+
   const { data: events } = await supabase
     .from("audit_events")
     .select("event_type, ts, ip, meta")
@@ -117,7 +129,6 @@ export async function POST(
   });
 
   // 5. Store the executed copy and finish the lifecycle.
-  const finalPath = `applications/${application.id}/executed.pdf`;
   const { error: uploadError } = await supabase.storage
     .from("final")
     .upload(finalPath, Buffer.from(finalBytes), {
@@ -147,15 +158,6 @@ export async function POST(
       completed_at: signedAt.toISOString(),
     })
     .eq("id", application.id);
-
-  await logAuditEvent({
-    event_type: "completed",
-    org_id: application.org_id,
-    application_id: application.id,
-    signer_id: signer.id,
-    ...meta,
-    meta: { final_pdf: finalPath, sha256 },
-  });
 
   // 6. Executed copies by email (signer + office).
   const attachment = {
