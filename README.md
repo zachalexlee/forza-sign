@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Forza Sign
 
-## Getting Started
+Self-hosted worksheet + e-signature platform for Forza Payments' ATM
+applications. Customers fill a validated web worksheet, the office reviews
+and corrects it, the data auto-populates the right ATM application packet
+(one field dictionary, many templates), and the customer signs through
+Forza's own ESIGN/UETA-compliant flow — no SignNow, no double data entry.
 
-First, run the development server:
+- **Spec:** `docs/build-plan.md` (source of truth — field dictionary,
+  PDF field maps, conditional logic)
+- **Execution plan:** `PLAN.md` (milestones M1–M6, decisions, dependencies)
+- **Tracking:** Linear project *Forza Sign* (Forza Payments team)
+
+## Stack
+
+Next.js (App Router, TypeScript) · Supabase (Postgres + RLS, Auth,
+Storage) · pdf-lib · signature_pad · Resend · Zod · Vercel
+
+## Development
 
 ```bash
+npm install
+cp .env.example .env.local   # fill in values (see comments in the file)
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Checks (all run in CI):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run lint
+npm run typecheck        # next typegen + tsc
+npm test                 # vitest unit suite
+bash scripts/test-rls.sh # RLS + audit-immutability harness (needs Postgres 16)
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Database: migrations live in `supabase/migrations/`, seed data (org,
+programs, the Appendix A field dictionary, template rows) in
+`supabase/seed.sql`. Use the Supabase CLI (`npx supabase start` /
+`db reset`) for a local stack, or apply them to a hosted project.
 
-## Learn More
+## Key directories
 
-To learn more about Next.js, take a look at the following resources:
+```
+src/lib/fields/       dictionary types, shared Zod validation, sensitive-field crypto
+src/lib/pdf/          fill engine, derived rules (Appendix C), Appendix B maps,
+                      signing-time stamping/flatten/certificate
+src/app/w/[token]     customer worksheet (token-gated)
+src/app/sign/[token]  signing experience (consent → view → sign)
+src/app/admin         staff dashboard: worksheets, applications, customers, templates
+supabase/             migrations + seed
+scripts/              inspect-pdf (verify maps vs real PDFs), sync-maps, test-rls
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Operational notes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Tokens**: customer links carry 256-bit tokens; only SHA-256 hashes are
+  stored. Worksheet links expire in 30 days, signing links in 14.
+- **Sensitive fields** (`owner.ssn`, `bank.account_number`) are encrypted
+  app-side (AES-256-GCM, `FIELD_ENCRYPTION_KEY`) before touching the DB and
+  only leave the server masked; they decrypt solely inside PDF fill runs.
+- **Audit trail** is append-only at the database level and is rendered onto
+  the certificate page of every executed PDF along with its SHA-256.
+- **Field maps**: the mapper UI (Admin → Templates) stores maps in
+  `templates.field_map`, which takes precedence over the in-repo Appendix B
+  maps (`src/lib/pdf/maps/`). `npm run sync:maps` seeds the in-repo maps
+  into an empty database; `npm run inspect:pdf -- <file>` diffs a map
+  against a real PDF's AcroForm fields.
 
-## Deploy on Vercel
+## Deploy (pending)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Hosted Supabase project + Vercel + Resend domain — tracked in Linear
+FOR-17. After the first deploy: apply migrations + seed, run
+`npm run sync:maps`, upload the blank packet PDFs (Admin → Templates),
+create the first admin user in `staff_users`, and configure the Vercel
+cron for `/api/cron/reminders` with `CRON_SECRET`.

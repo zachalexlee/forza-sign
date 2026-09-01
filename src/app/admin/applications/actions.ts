@@ -2,6 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { regenerateFilledPdf } from "@/lib/applications";
+import {
+  hasStampableCustomerSignature,
+  resolveTemplateMap,
+} from "@/lib/pdf/resolve-map";
 import { logAuditEvent } from "@/lib/audit";
 import { sendEmail, signingRequestEmail } from "@/lib/email";
 import { WorksheetData } from "@/lib/fields/types";
@@ -186,7 +190,7 @@ export async function sendForSignature(input: {
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, org_id, status, filled_pdf_path, programs(name), worksheets(customers(business_name))"
+      "id, org_id, status, filled_pdf_path, programs(code, name), templates(field_map, signature_placements), worksheets(customers(business_name))"
     )
     .eq("id", input.applicationId)
     .eq("org_id", staff.orgId)
@@ -197,6 +201,23 @@ export async function sendForSignature(input: {
   const { filled } = await regenerateFilledPdf(input.applicationId);
   if (!filled) {
     throw new Error("Upload the blank template PDF before sending for signature");
+  }
+
+  // Never send a document that cannot end up carrying a signature.
+  const programCode = (application.programs as unknown as { code: string })?.code;
+  const map = programCode
+    ? resolveTemplateMap(
+        application.templates as unknown as {
+          field_map: unknown;
+          signature_placements: unknown;
+        },
+        programCode
+      )
+    : undefined;
+  if (!map || !hasStampableCustomerSignature(map)) {
+    throw new Error(
+      "This template has no customer signature placement — add one in the template mapping before sending"
+    );
   }
 
   const { token, hash } = generateToken();
