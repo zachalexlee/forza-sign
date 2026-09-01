@@ -31,6 +31,17 @@ function isMapEntryArray(v: unknown): v is MapEntry[] {
   );
 }
 
+/**
+ * A document can only be legitimately executed if at least one customer
+ * signature placement names a PDF field to stamp — otherwise stampAndFlatten
+ * would flatten with zero signatures while the flow still "completes".
+ */
+export function hasStampableCustomerSignature(map: TemplateMap): boolean {
+  return map.signaturePlacements.some(
+    (p) => p.signer === "customer" && p.kind === "signature" && !!p.pdf
+  );
+}
+
 export function resolveTemplateMap(
   row: TemplateRowMaps | null | undefined,
   programCode: string

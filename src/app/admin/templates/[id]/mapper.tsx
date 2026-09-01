@@ -28,7 +28,12 @@ export function MapperEditor({
   currentMap,
   suggestedMap,
 }: MapperEditorProps) {
-  const [entries, setEntries] = useState<MapEntry[]>(currentMap);
+  // An unseeded template still fills PDFs from the Appendix B fallback, so
+  // the editor must start from that effective map — otherwise saving a
+  // single edit would silently replace the whole fallback with one entry.
+  const [entries, setEntries] = useState<MapEntry[]>(
+    currentMap.length > 0 ? currentMap : suggestedMap
+  );
   const [rawMode, setRawMode] = useState(false);
   const [rawText, setRawText] = useState("");
   const [pending, setPending] = useState(false);

@@ -2,12 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { MapEntry } from "@/lib/pdf/types";
+import { validateMapEntries } from "@/lib/pdf/validate-map";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
  * Persist a template's field map (the admin mapper UI, build plan Phase 4).
  * Admin-only (mirrors the templates admin_write RLS policy), org-scoped.
+ * Entries are validated against the dictionary, derived-rule, and transform
+ * sets and sanitized before storage — the raw-JSON editor must not be able
+ * to persist a map that breaks the next PDF regeneration.
  */
 export async function saveTemplateMap(input: {
   templateId: string;
@@ -18,27 +22,13 @@ export async function saveTemplateMap(input: {
     throw new Error("Only admins can edit template mappings");
   }
 
-  const errors: string[] = [];
-  const seen = new Set<string>();
-  for (const [i, entry] of input.fieldMap.entries()) {
-    if (!entry || typeof entry.pdf !== "string" || !entry.pdf.trim()) {
-      errors.push(`Row ${i + 1}: missing PDF field name`);
-      continue;
-    }
-    const sources = [entry.source, entry.const, entry.derived].filter(
-      (v) => v !== undefined && v !== ""
-    );
-    if (sources.length !== 1) {
-      errors.push(`${entry.pdf}: set exactly one of dictionary key / constant / derived rule`);
-    }
-    // Same PDF field mapped twice is almost always a mistake (per-digit
-    // boxes use distinct names, so duplicates aren't needed).
-    if (seen.has(entry.pdf)) errors.push(`${entry.pdf}: mapped more than once`);
-    seen.add(entry.pdf);
-  }
+  const supabase = createAdminClient();
+  const { data: defs } = await supabase.from("field_definitions").select("key");
+  const validKeys = new Set((defs ?? []).map((d) => d.key as string));
+
+  const { errors, entries } = validateMapEntries(input.fieldMap, validKeys);
   if (errors.length > 0) return { ok: false, errors };
 
-  const supabase = createAdminClient();
   const { data: template } = await supabase
     .from("templates")
     .select("id, programs(org_id)")
@@ -49,7 +39,7 @@ export async function saveTemplateMap(input: {
 
   const { error } = await supabase
     .from("templates")
-    .update({ field_map: input.fieldMap })
+    .update({ field_map: entries })
     .eq("id", input.templateId);
   if (error) throw new Error(`Save failed: ${error.message}`);
 
