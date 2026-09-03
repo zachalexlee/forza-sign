@@ -46,6 +46,9 @@ export function ApplicationEditor({
   const [signerEmail, setSignerEmail] = useState(suggestedSigner.email);
   const [link, setLink] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Bumped after every regeneration so the preview iframe re-fetches the PDF
+  // (the route URL is otherwise stable and the iframe would show stale bytes).
+  const [pdfRev, setPdfRev] = useState(0);
 
   async function save() {
     setPending(true);
@@ -55,6 +58,7 @@ export function ApplicationEditor({
       setMissing(result.missingFields);
       setMessage("Saved — PDF regenerated.");
       setOverrides({});
+      setPdfRev((r) => r + 1);
       router.refresh();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Save failed");
@@ -70,7 +74,11 @@ export function ApplicationEditor({
       {/* PDF preview */}
       <div className="min-h-[600px] rounded-lg border border-zinc-200 bg-zinc-50">
         {pdfUrl ? (
-          <iframe src={pdfUrl} className="h-[80vh] w-full rounded-lg" title="Filled application" />
+          <iframe
+            src={`${pdfUrl}?rev=${pdfRev}`}
+            className="h-[80vh] w-full rounded-lg"
+            title="Filled application"
+          />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
             <p className="text-sm text-zinc-500">
@@ -86,6 +94,7 @@ export function ApplicationEditor({
                     formData.set("templateId", templateId);
                     await uploadTemplateBlank(formData);
                     await updateApplicationData({ applicationId, data: {} });
+                    setPdfRev((r) => r + 1);
                     router.refresh();
                   } catch (err) {
                     setUploadError(
@@ -174,7 +183,7 @@ export function ApplicationEditor({
           </button>
           {pdfUrl && (
             <a
-              href={pdfUrl}
+              href={`${pdfUrl}?download=1`}
               download
               className="rounded-md border border-zinc-300 px-4 py-2 text-sm"
             >

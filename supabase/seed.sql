@@ -142,6 +142,8 @@ values
   null, null, null, 30),
 ('atm.count', null, 'Number of ATMs', 'office', 'number', false, false, false,
   null, '{"min": 1}', null, 40),
+('atm.price', null, 'ATM Price (per unit)', 'office', 'currency', false, false, false,
+  null, null, 'Purchase order unit price — set by the office only.', 45),
 ('sales.rep_name', null, 'Sales Representative', 'office', 'text', false, false, false,
   null, '{"default": "Lee Boys/"}', null, 50)
 on conflict (key) do nothing;

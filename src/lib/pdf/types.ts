@@ -60,6 +60,8 @@ export interface TemplateMap {
     /** …or explicit page coordinates for signature lines with no field. */
     x?: number;
     y?: number;
+    /** Max stamp width for coordinate placements (default 180pt). */
+    width?: number;
     page: number;
     note?: string;
   }[];
