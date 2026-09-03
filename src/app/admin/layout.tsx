@@ -27,10 +27,9 @@ export default async function AdminLayout({
       <header className="border-b border-zinc-200 border-t-2 border-t-forza-red bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
           <nav className="flex items-center gap-6 text-sm">
-            <Link href="/admin" className="flex items-center gap-2">
+            <Link href="/admin" className="flex items-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/brand/f-mark.png" alt="" className="h-6 w-auto" />
-              <span className="wordmark text-lg text-zinc-900">Forza Sign</span>
+              <img src="/brand/forza-sign.png" alt="Forza Sign" className="h-8 w-auto" />
             </Link>
             <Link href="/admin" className="text-zinc-600 hover:text-forza-red">
               Worksheets
