@@ -30,7 +30,7 @@ import { MapEntry, TemplateMap } from "../types";
  * legacy NULL) and is older than this. Office-edited maps ('custom') are
  * never auto-updated.
  */
-export const MAP_VERSION = 2;
+export const MAP_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Shared fields — identical names in both packets (cover sheet, application,
@@ -126,6 +126,9 @@ const shared: MapEntry[] = [
   { pdf: "ACH from Account on Record", const: "Yes", checkbox: { equals: "Yes" }, note: "default payment method" },
   { pdf: "Select one", const: "X", note: "PO ACH section: Checking (default)" },
   { pdf: "# of ATMs", source: "atm.count", note: "shared: PO + Schedule A (CL)" },
+  { pdf: "Item DescriptionRow1", source: "atm.make_model", note: "PO item line" },
+  { pdf: "Price PerRow1", source: "atm.price", transform: "currency", note: "PO unit price — office-set" },
+  { pdf: "AmountRow1", derived: "atm_amount", note: "PO line total: count × price" },
 ];
 
 // W-9 per-digit TIN boxes. The field names are NOT in visual order — the
@@ -189,9 +192,9 @@ const mlOnly: MapEntry[] = [
 const clSignatures: TemplateMap["signaturePlacements"] = [
   { kind: "signature", signer: "customer", page: 2, pdf: "Owner Signature" },
   { kind: "signature", signer: "customer", page: 3, pdf: "By X", note: "processing agreement" },
-  { kind: "signature", signer: "customer", page: 4, x: 95, y: 262, note: "ACH authorization" },
+  { kind: "signature", signer: "customer", page: 4, x: 95, y: 244, note: "ACH authorization" },
   { kind: "signature", signer: "customer", page: 5, x: 150, y: 196, note: "W-9" },
-  { kind: "signature", signer: "customer", page: 6, x: 125, y: 104, note: "purchase order" },
+  { kind: "signature", signer: "customer", page: 6, x: 160, y: 104, width: 140, note: "purchase order" },
   { kind: "signature", signer: "customer", page: 7, pdf: "Merchant Signature3", note: "cash-loading agreement" },
   { kind: "signature", signer: "forza", page: 2, pdf: "Sales Associate Signature" },
   { kind: "signature", signer: "forza", page: 3, pdf: "By X_2" },
@@ -202,9 +205,9 @@ const mlSignatures: TemplateMap["signaturePlacements"] = [
   { kind: "signature", signer: "customer", page: 2, pdf: "Owner Signature" },
   { kind: "signature", signer: "customer", page: 3, pdf: "Signature", note: "source of funds — ATM operator" },
   { kind: "signature", signer: "customer", page: 4, pdf: "By X", note: "processing agreement" },
-  { kind: "signature", signer: "customer", page: 5, x: 95, y: 262, note: "ACH authorization" },
+  { kind: "signature", signer: "customer", page: 5, x: 95, y: 244, note: "ACH authorization" },
   { kind: "signature", signer: "customer", page: 6, x: 150, y: 196, note: "W-9" },
-  { kind: "signature", signer: "customer", page: 7, x: 125, y: 104, note: "purchase order" },
+  { kind: "signature", signer: "customer", page: 7, x: 160, y: 104, width: 140, note: "purchase order" },
   { kind: "signature", signer: "forza", page: 2, pdf: "Sales Associate Signature" },
   { kind: "signature", signer: "forza", page: 3, pdf: "Signature_2" },
   { kind: "signature", signer: "forza", page: 4, pdf: "By X_2" },

@@ -39,6 +39,7 @@ export const DERIVED_RULE_NAMES = [
   "w9_llc_tax_code",
   "wireless_selected",
   "wireless_fee",
+  "atm_amount",
   "business_city_state_zip",
   "bank_city_state_zip",
   "owner_home_city_state_zip",
@@ -131,6 +132,15 @@ export function resolveDerived(rule: string, ctx: FillContext): string | boolean
       return data["install.wireless_box"] === true;
     case "wireless_fee":
       return data["install.wireless_box"] === true ? "25.95" : "";
+
+    // Purchase order line total: # of ATMs × office-set unit price.
+    case "atm_amount": {
+      const count = Number(str(data, "atm.count"));
+      const price = Number(str(data, "atm.price"));
+      if (!Number.isFinite(count) || !Number.isFinite(price) || count <= 0 || price <= 0)
+        return "";
+      return (count * price).toFixed(2);
+    }
 
     // Combined address lines used on several pages.
     case "business_city_state_zip":

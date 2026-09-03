@@ -50,20 +50,13 @@ export default async function ApplicationPage({
     }
   )?.customers?.business_name;
 
-  // Signed URLs are short-lived; storage buckets are private (build plan §5).
+  // Streamed through the authenticated pdf route — a signed URL minted at
+  // render time expires while the page sits open (broken iframe + download).
   const admin = createAdminClient();
-  let pdfUrl: string | null = null;
-  if (application.final_pdf_path) {
-    const { data } = await admin.storage
-      .from("final")
-      .createSignedUrl(application.final_pdf_path, 300);
-    pdfUrl = data?.signedUrl ?? null;
-  } else if (application.filled_pdf_path) {
-    const { data } = await admin.storage
-      .from("filled")
-      .createSignedUrl(application.filled_pdf_path, 300);
-    pdfUrl = data?.signedUrl ?? null;
-  }
+  const pdfUrl =
+    application.final_pdf_path || application.filled_pdf_path
+      ? `/admin/applications/${id}/pdf`
+      : null;
 
   let templateUploaded = false;
   if (template?.storage_path) {

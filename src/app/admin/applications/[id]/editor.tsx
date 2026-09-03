@@ -174,7 +174,7 @@ export function ApplicationEditor({
           </button>
           {pdfUrl && (
             <a
-              href={pdfUrl}
+              href={`${pdfUrl}?download=1`}
               download
               className="rounded-md border border-zinc-300 px-4 py-2 text-sm"
             >

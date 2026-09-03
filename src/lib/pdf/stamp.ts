@@ -52,7 +52,12 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
         if (pageIndex >= 0 && pageIndex < doc.getPageCount()) {
           targets.push({
             pageIndex,
-            rect: { x: placement.x, y: placement.y, width: 180, height: 24 },
+            rect: {
+              x: placement.x,
+              y: placement.y,
+              width: placement.width ?? 180,
+              height: 24,
+            },
           });
           continue;
         }
