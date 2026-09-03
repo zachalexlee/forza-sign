@@ -74,6 +74,7 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-8 p-8">
       <div className="flex flex-col items-center text-center">
+        <h1 className="sr-only">Forza Sign</h1>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/brand/forza-sign.png" alt="Forza Sign" className="h-16 w-auto" />
         <p className="mt-4 text-sm text-zinc-500">Staff sign in</p>
