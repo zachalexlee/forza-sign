@@ -3,7 +3,7 @@ import { isRateLimited, rateLimitResponse } from "@/lib/rate-limit";
 import { logAuditEvent, requestMeta } from "@/lib/audit";
 import { sendEmail, worksheetSubmittedEmail } from "@/lib/email";
 import { customerWritableKeys, validateWorksheetData } from "@/lib/fields/schema";
-import { encryptSensitiveValues } from "@/lib/fields/sensitive";
+import { encryptSensitiveValues, validationView } from "@/lib/fields/sensitive";
 import { WorksheetData } from "@/lib/fields/types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -37,16 +37,25 @@ export async function POST(
   );
 
   const { worksheet } = result;
+
+  // Full validation server-side — the browser's copy is advisory only.
+  // Validate the plaintext view: stored ciphertext becomes a masked sentinel
+  // (= already provided), incoming plaintext is checked by the field schemas.
+  // Validating after encryption would feed enc:v1: strings to the schemas
+  // and reject every sensitive field.
+  const issues = validateWorksheetData(
+    defs,
+    validationView(defs, incoming, worksheet.data),
+    { partial: false }
+  );
+  if (issues.length > 0) {
+    return NextResponse.json({ error: "validation_failed", issues }, { status: 422 });
+  }
+
   const merged = {
     ...worksheet.data,
     ...encryptSensitiveValues(defs, incoming, worksheet.data),
   };
-
-  // Full validation server-side — the browser's copy is advisory only.
-  const issues = validateWorksheetData(defs, merged, { partial: false });
-  if (issues.length > 0) {
-    return NextResponse.json({ error: "validation_failed", issues }, { status: 422 });
-  }
 
   const now = new Date().toISOString();
   const supabase = createAdminClient();

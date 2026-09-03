@@ -10,5 +10,7 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",
+    // The real-packet PDF tests exceed the 5s default on slow runners.
+    testTimeout: 30_000,
   },
 });

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { logAuditEvent } from "@/lib/audit";
 import { sendEmail, worksheetInviteEmail } from "@/lib/email";
 import { validateWorksheetData } from "@/lib/fields/schema";
-import { encryptSensitiveValues } from "@/lib/fields/sensitive";
+import { encryptSensitiveValues, validationView } from "@/lib/fields/sensitive";
 import { WorksheetData } from "@/lib/fields/types";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -189,17 +189,23 @@ export async function saveWorksheetReview(input: {
   if (!worksheet) throw new Error("Worksheet not found");
 
   const defs = await loadCustomerFieldDefinitions();
+
+  // Validate the plaintext view (stored ciphertext = masked sentinel =
+  // already provided); validating the encrypted merge would feed enc:v1:
+  // strings to the field schemas and reject every sensitive field.
+  const issues = validateWorksheetData(
+    defs,
+    validationView(defs, input.data, worksheet.data),
+    { partial: !input.markReviewed }
+  );
+  if (input.markReviewed && issues.length > 0) {
+    return { ok: false, issues };
+  }
+
   const merged = {
     ...worksheet.data,
     ...encryptSensitiveValues(defs, input.data, worksheet.data),
   };
-
-  const issues = validateWorksheetData(defs, merged, {
-    partial: !input.markReviewed,
-  });
-  if (input.markReviewed && issues.length > 0) {
-    return { ok: false, issues };
-  }
 
   const { error } = await supabase
     .from("worksheets")

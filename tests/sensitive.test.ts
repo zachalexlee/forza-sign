@@ -3,6 +3,7 @@ import { isEncrypted } from "@/lib/crypto";
 import {
   encryptSensitiveValues,
   maskSensitiveValues,
+  validationView,
 } from "@/lib/fields/sensitive";
 import { FieldDefinition, isMaskedValue } from "@/lib/fields/types";
 
@@ -54,5 +55,71 @@ describe("sensitive value round trip", () => {
     const once = encryptSensitiveValues(defs, { "owner.ssn": "123-45-6789" });
     const twice = encryptSensitiveValues(defs, once);
     expect(twice["owner.ssn"]).toBe(once["owner.ssn"]);
+  });
+});
+
+describe("submit-time validation of sensitive fields", () => {
+  // Regression: the submit route once validated the encrypted merge, so the
+  // account-number schema saw "enc:v1:…" and rejected every submission.
+  const fullDefs = [
+    {
+      key: "bank.account_number",
+      label: "Account Number",
+      field_type: "account_number",
+      sensitive: true,
+      required: true,
+      ask_customer: true,
+      options: null,
+      visible_if: null,
+      validation: null,
+    },
+  ] as unknown as FieldDefinition[];
+
+  it("plaintext view of fresh input passes validation", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const view = validationView(fullDefs, { "bank.account_number": "757211680" }, {});
+    expect(validateWorksheetData(fullDefs, view, { partial: false })).toEqual([]);
+  });
+
+  it("plaintext view of a previously stored value passes validation", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const stored = encryptSensitiveValues(fullDefs, {
+      "bank.account_number": "757211680",
+    });
+    const view = validationView(fullDefs, {}, stored);
+    expect(validateWorksheetData(fullDefs, view, { partial: false })).toEqual([]);
+  });
+
+  it("an echoed mask over stored ciphertext passes validation", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const stored = encryptSensitiveValues(fullDefs, {
+      "bank.account_number": "757211680",
+    });
+    const view = validationView(
+      fullDefs,
+      { "bank.account_number": { __masked: true, last4: "1680" } },
+      stored
+    );
+    expect(validateWorksheetData(fullDefs, view, { partial: false })).toEqual([]);
+  });
+
+  it("a crafted mask with nothing stored still fails required validation", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const view = validationView(
+      fullDefs,
+      { "bank.account_number": { __masked: true, last4: "0000" } },
+      {}
+    );
+    const issues = validateWorksheetData(fullDefs, view, { partial: false });
+    expect(issues.map((i) => i.key)).toEqual(["bank.account_number"]);
+  });
+
+  it("the encrypted merge itself fails validation (why the view is needed)", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const merged = encryptSensitiveValues(fullDefs, {
+      "bank.account_number": "757211680",
+    });
+    const issues = validateWorksheetData(fullDefs, merged, { partial: false });
+    expect(issues.map((i) => i.key)).toEqual(["bank.account_number"]);
   });
 });
