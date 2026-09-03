@@ -63,11 +63,7 @@ function LoginForm() {
         />
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-      >
+      <button type="submit" disabled={loading} className="btn-primary w-full">
         {loading ? "Signing in…" : "Sign in"}
       </button>
     </form>
@@ -77,9 +73,11 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-8 p-8">
-      <div className="text-center">
-        <h1 className="text-2xl font-semibold">Forza Sign</h1>
-        <p className="mt-1 text-sm text-zinc-500">Staff sign in</p>
+      <div className="flex flex-col items-center text-center">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/brand/f-mark.png" alt="" className="h-12 w-auto" />
+        <h1 className="wordmark mt-4 text-3xl text-zinc-900">Forza Sign</h1>
+        <p className="mt-2 text-sm text-zinc-500">Staff sign in</p>
       </div>
       <Suspense>
         <LoginForm />

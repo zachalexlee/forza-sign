@@ -71,8 +71,9 @@ export default async function WorksheetPage({
   return (
     <main className="mx-auto max-w-2xl px-4 py-10">
       <header className="mb-8">
-        <p className="text-sm font-medium text-zinc-500">Forza Payments</p>
-        <h1 className="mt-1 text-2xl font-semibold">ATM Application Worksheet</h1>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/brand/forza-payments.png" alt="Forza Payments" className="h-9 w-auto" />
+        <h1 className="mt-4 text-2xl font-semibold">ATM Application Worksheet</h1>
         <p className="mt-2 text-sm text-zinc-600">
           For {worksheet.customers?.business_name}. Your progress saves
           automatically — you can close this page and come back with the same

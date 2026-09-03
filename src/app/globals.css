@@ -1,26 +1,128 @@
 @import "tailwindcss";
 
+/*
+ * Forza Payments Brand & Design System v2.0 — token reference (07).
+ * Colour and type values here are canonical; the design PDF wins on conflict.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --forza-red: #f00411;
+  --forza-red-600: #c9000b;
+  --forza-red-700: #9b0008;
+  --forza-red-100: #ffe8e9;
+  --carbon: #111111;
+  --paper: #f4f5f7;
+
+  --background: var(--paper);
+  --foreground: var(--carbon);
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-forza-red: var(--forza-red);
+  --color-forza-red-600: var(--forza-red-600);
+  --color-forza-red-700: var(--forza-red-700);
+  --color-forza-red-100: var(--forza-red-100);
+  --color-carbon: var(--carbon);
+  --color-paper: var(--paper);
+
+  /* Neutrals — cool slate, not warm grey (02). The app was built on zinc-*
+     utilities; remapping the scale re-skins every surface to the brand
+     neutrals, with 900 pinned to carbon (default text). */
+  --color-zinc-50: #f9fafb;
+  --color-zinc-100: #f4f5f7;
+  --color-zinc-200: #e5e7eb;
+  --color-zinc-300: #d1d5db;
+  --color-zinc-400: #9ca3af;
+  --color-zinc-500: #6b7280;
+  --color-zinc-600: #4b5563;
+  --color-zinc-700: #374151;
+  --color-zinc-800: #1f2937;
+  --color-zinc-900: #111111;
+
+  --font-sans: var(--font-body), system-ui, sans-serif;
+  --font-display: var(--font-display-face), "Barlow Condensed", sans-serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body), system-ui, sans-serif;
+}
+
+/* Product UI headings: Rajdhani, sentence case (03). */
+h1,
+h2,
+h3 {
+  font-family: var(--font-display-face), "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* The Forza Sign wordmark treatment used beside the F-mark. */
+.wordmark {
+  font-family: var(--font-display-face), "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  font-style: italic;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  line-height: 1;
+}
+
+/*
+ * Button (05): uppercase Rajdhani 600 15px, 0.04em tracking, 12×22 padding,
+ * 4px radius. Primary is red on white text and earns the red glow on hover;
+ * dark is carbon. Scales to 0.98 on press. Focus ring 2px red, 2px offset.
+ */
+.btn-primary,
+.btn-dark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-display-face), "Barlow Condensed", sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  padding: 11px 22px;
+  border-radius: 4px;
+  color: #ffffff;
+  transition:
+    background-color 180ms var(--ease-out),
+    box-shadow 180ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+.btn-primary {
+  background: var(--forza-red);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--forza-red-600);
+  box-shadow: 0 0 0 4px rgba(240, 4, 17, 0.18);
+}
+.btn-primary:active:not(:disabled) {
+  background: var(--forza-red-700);
+  transform: scale(0.98);
+}
+.btn-dark {
+  background: var(--carbon);
+}
+.btn-dark:hover:not(:disabled) {
+  background: #1f2937;
+}
+.btn-dark:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn-primary:focus-visible,
+.btn-dark:focus-visible {
+  outline: 2px solid var(--forza-red);
+  outline-offset: 2px;
+}
+.btn-primary:disabled,
+.btn-dark:disabled {
+  opacity: 0.5;
 }
