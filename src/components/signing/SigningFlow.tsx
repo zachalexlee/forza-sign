@@ -145,7 +145,7 @@ export function SigningFlow({
           type="button"
           disabled={!consentChecked || !nameChecked || pending}
           onClick={submitConsent}
-          className="rounded-md bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+          className="btn-dark"
         >
           {pending ? "One moment…" : "Continue to document"}
         </button>
@@ -174,7 +174,7 @@ export function SigningFlow({
               type="button"
               disabled={pending}
               onClick={adoptAndSign}
-              className="ml-auto rounded-md bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+              className="btn-primary ml-auto"
             >
               {pending ? "Signing…" : "Adopt & sign"}
             </button>
@@ -187,7 +187,7 @@ export function SigningFlow({
             <button
               type="button"
               onClick={() => setModalOpen(true)}
-              className="ml-auto rounded-md bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white"
+              className="btn-dark ml-auto"
             >
               Create signature
             </button>

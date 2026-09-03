@@ -223,16 +223,12 @@ export function WorksheetForm({ token, definitions, initialData }: WorksheetForm
             type="button"
             onClick={handleSubmit}
             disabled={submitting}
-            className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
+            className="btn-primary"
           >
             {submitting ? "Submitting…" : "Submit worksheet"}
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={goNext}
-            className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white"
-          >
+          <button type="button" onClick={goNext} className="btn-dark">
             Continue
           </button>
         )}
