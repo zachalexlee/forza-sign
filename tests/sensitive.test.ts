@@ -56,3 +56,46 @@ describe("sensitive value round trip", () => {
     expect(twice["owner.ssn"]).toBe(once["owner.ssn"]);
   });
 });
+
+describe("submit-time validation of sensitive fields", () => {
+  // Regression: the submit route once validated the encrypted merge, so the
+  // account-number schema saw "enc:v1:…" and rejected every submission.
+  const fullDefs = [
+    {
+      key: "bank.account_number",
+      label: "Account Number",
+      field_type: "account_number",
+      sensitive: true,
+      required: true,
+      ask_customer: true,
+      options: null,
+      visible_if: null,
+      validation: null,
+    },
+  ] as unknown as FieldDefinition[];
+
+  it("plaintext view of fresh input passes validation", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const incoming = { "bank.account_number": "757211680" };
+    const view = { ...maskSensitiveValues(fullDefs, {}), ...incoming };
+    expect(validateWorksheetData(fullDefs, view, { partial: false })).toEqual([]);
+  });
+
+  it("plaintext view of a previously stored value passes validation", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const stored = encryptSensitiveValues(fullDefs, {
+      "bank.account_number": "757211680",
+    });
+    const view = { ...maskSensitiveValues(fullDefs, stored) };
+    expect(validateWorksheetData(fullDefs, view, { partial: false })).toEqual([]);
+  });
+
+  it("the encrypted merge itself fails validation (why the view is needed)", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const merged = encryptSensitiveValues(fullDefs, {
+      "bank.account_number": "757211680",
+    });
+    const issues = validateWorksheetData(fullDefs, merged, { partial: false });
+    expect(issues.map((i) => i.key)).toEqual(["bank.account_number"]);
+  });
+});
