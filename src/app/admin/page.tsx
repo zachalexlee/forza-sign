@@ -23,6 +23,41 @@ export default async function AdminHome({
   const { status } = await searchParams;
   const supabase = await createClient();
 
+  // Pipeline stats — small tables, count client-side.
+  const [{ data: wsStatuses }, { data: appStatuses }] = await Promise.all([
+    supabase.from("worksheets").select("status"),
+    supabase.from("applications").select("status"),
+  ]);
+  const countOf = (rows: { status: string }[] | null, ...statuses: string[]) =>
+    (rows ?? []).filter((r) => statuses.includes(r.status)).length;
+  const stats = [
+    {
+      label: "Awaiting customer",
+      value: countOf(wsStatuses, "sent", "in_progress"),
+      href: "/admin?status=in_progress",
+    },
+    {
+      label: "Needs review",
+      value: countOf(wsStatuses, "submitted"),
+      href: "/admin?status=submitted",
+    },
+    {
+      label: "App drafts",
+      value: countOf(appStatuses, "draft"),
+      href: "/admin/applications",
+    },
+    {
+      label: "Out for signature",
+      value: countOf(appStatuses, "sent"),
+      href: "/admin/applications",
+    },
+    {
+      label: "Completed",
+      value: countOf(appStatuses, "completed"),
+      href: "/admin/applications",
+    },
+  ];
+
   let query = supabase
     .from("worksheets")
     .select("id, status, submitted_at, created_at, customers(business_name, contact_name, email)")
@@ -33,6 +68,21 @@ export default async function AdminHome({
 
   return (
     <div>
+      <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {stats.map((s) => (
+          <Link
+            key={s.label}
+            href={s.href}
+            className="rounded-lg border border-zinc-200 bg-white p-4 transition-colors hover:border-forza-red"
+          >
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
+              {s.label}
+            </p>
+            <p className="mt-1 font-display text-3xl font-bold tabular-nums">{s.value}</p>
+          </Link>
+        ))}
+      </div>
+
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Worksheets</h1>
         <Link
