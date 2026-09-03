@@ -45,6 +45,7 @@ export function ApplicationEditor({
   const [signerName, setSignerName] = useState(suggestedSigner.name);
   const [signerEmail, setSignerEmail] = useState(suggestedSigner.email);
   const [link, setLink] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   async function save() {
     setPending(true);
@@ -80,10 +81,19 @@ export function ApplicationEditor({
             {!templateUploaded && templateId && (
               <form
                 action={async (formData) => {
-                  formData.set("templateId", templateId);
-                  await uploadTemplateBlank(formData);
-                  await updateApplicationData({ applicationId, data: {} });
-                  router.refresh();
+                  setUploadError(null);
+                  try {
+                    formData.set("templateId", templateId);
+                    await uploadTemplateBlank(formData);
+                    await updateApplicationData({ applicationId, data: {} });
+                    router.refresh();
+                  } catch (err) {
+                    setUploadError(
+                      err instanceof Error && err.message
+                        ? err.message
+                        : "Upload failed — if the PDF is large, it may exceed the upload size limit."
+                    );
+                  }
                 }}
                 className="flex flex-col items-center gap-2"
               >
@@ -94,6 +104,9 @@ export function ApplicationEditor({
                 >
                   Upload blank template PDF
                 </button>
+                {uploadError && (
+                  <p className="max-w-sm text-sm text-red-600">{uploadError}</p>
+                )}
               </form>
             )}
           </div>
