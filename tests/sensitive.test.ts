@@ -3,6 +3,7 @@ import { isEncrypted } from "@/lib/crypto";
 import {
   encryptSensitiveValues,
   maskSensitiveValues,
+  validationView,
 } from "@/lib/fields/sensitive";
 import { FieldDefinition, isMaskedValue } from "@/lib/fields/types";
 
@@ -76,8 +77,7 @@ describe("submit-time validation of sensitive fields", () => {
 
   it("plaintext view of fresh input passes validation", async () => {
     const { validateWorksheetData } = await import("@/lib/fields/schema");
-    const incoming = { "bank.account_number": "757211680" };
-    const view = { ...maskSensitiveValues(fullDefs, {}), ...incoming };
+    const view = validationView(fullDefs, { "bank.account_number": "757211680" }, {});
     expect(validateWorksheetData(fullDefs, view, { partial: false })).toEqual([]);
   });
 
@@ -86,8 +86,32 @@ describe("submit-time validation of sensitive fields", () => {
     const stored = encryptSensitiveValues(fullDefs, {
       "bank.account_number": "757211680",
     });
-    const view = { ...maskSensitiveValues(fullDefs, stored) };
+    const view = validationView(fullDefs, {}, stored);
     expect(validateWorksheetData(fullDefs, view, { partial: false })).toEqual([]);
+  });
+
+  it("an echoed mask over stored ciphertext passes validation", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const stored = encryptSensitiveValues(fullDefs, {
+      "bank.account_number": "757211680",
+    });
+    const view = validationView(
+      fullDefs,
+      { "bank.account_number": { __masked: true, last4: "1680" } },
+      stored
+    );
+    expect(validateWorksheetData(fullDefs, view, { partial: false })).toEqual([]);
+  });
+
+  it("a crafted mask with nothing stored still fails required validation", async () => {
+    const { validateWorksheetData } = await import("@/lib/fields/schema");
+    const view = validationView(
+      fullDefs,
+      { "bank.account_number": { __masked: true, last4: "0000" } },
+      {}
+    );
+    const issues = validateWorksheetData(fullDefs, view, { partial: false });
+    expect(issues.map((i) => i.key)).toEqual(["bank.account_number"]);
   });
 
   it("the encrypted merge itself fails validation (why the view is needed)", async () => {

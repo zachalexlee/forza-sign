@@ -30,6 +30,25 @@ export function encryptSensitiveValues(
   return out;
 }
 
+/**
+ * Plaintext view for validation: incoming values overlaid on the stored blob,
+ * with stored ciphertext masked (= already provided). An incoming masked
+ * sentinel is dropped from the overlay rather than trusted — it only counts
+ * as provided when real ciphertext exists underneath, so a crafted mask for a
+ * never-stored required field still fails validation.
+ */
+export function validationView(
+  defs: FieldDefinition[],
+  incoming: WorksheetData,
+  existing: WorksheetData
+): WorksheetData {
+  const overlay: WorksheetData = { ...incoming };
+  for (const def of defs) {
+    if (def.sensitive && isMaskedValue(overlay[def.key])) delete overlay[def.key];
+  }
+  return { ...maskSensitiveValues(defs, existing), ...overlay };
+}
+
 /** Stored blob → safe-to-send blob (ciphertext replaced by masked sentinel). */
 export function maskSensitiveValues(
   defs: FieldDefinition[],

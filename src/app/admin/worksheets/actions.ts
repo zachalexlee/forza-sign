@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { logAuditEvent } from "@/lib/audit";
 import { sendEmail, worksheetInviteEmail } from "@/lib/email";
 import { validateWorksheetData } from "@/lib/fields/schema";
-import { encryptSensitiveValues, maskSensitiveValues } from "@/lib/fields/sensitive";
+import { encryptSensitiveValues, validationView } from "@/lib/fields/sensitive";
 import { WorksheetData } from "@/lib/fields/types";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -195,7 +195,7 @@ export async function saveWorksheetReview(input: {
   // strings to the field schemas and reject every sensitive field.
   const issues = validateWorksheetData(
     defs,
-    { ...maskSensitiveValues(defs, worksheet.data), ...input.data },
+    validationView(defs, input.data, worksheet.data),
     { partial: !input.markReviewed }
   );
   if (input.markReviewed && issues.length > 0) {

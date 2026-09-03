@@ -3,7 +3,7 @@ import { isRateLimited, rateLimitResponse } from "@/lib/rate-limit";
 import { logAuditEvent, requestMeta } from "@/lib/audit";
 import { sendEmail, worksheetSubmittedEmail } from "@/lib/email";
 import { customerWritableKeys, validateWorksheetData } from "@/lib/fields/schema";
-import { encryptSensitiveValues, maskSensitiveValues } from "@/lib/fields/sensitive";
+import { encryptSensitiveValues, validationView } from "@/lib/fields/sensitive";
 import { WorksheetData } from "@/lib/fields/types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -45,7 +45,7 @@ export async function POST(
   // and reject every sensitive field.
   const issues = validateWorksheetData(
     defs,
-    { ...maskSensitiveValues(defs, worksheet.data), ...incoming },
+    validationView(defs, incoming, worksheet.data),
     { partial: false }
   );
   if (issues.length > 0) {
