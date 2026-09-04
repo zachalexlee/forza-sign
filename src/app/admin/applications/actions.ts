@@ -526,55 +526,32 @@ export async function countersignApplication(input: {
       return { ok: false, error: `Store failed: ${uploadError.message}` };
     }
 
-    // Record the countersign event durably BEFORE finalizing, and checked —
-    // the replacement certificate already prints this event, so the database
-    // trail must not silently omit it. On failure nothing is finalized: the
-    // claim is released and a retry re-runs cleanly (a leftover event from a
-    // failed attempt is an honest record of that attempt).
-    const { error: auditError } = await supabase.from("audit_events").insert({
-      event_type: "signed",
-      org_id: application.org_id,
-      application_id: application.id,
-      ts: claimTs,
-      meta: {
-        action: "countersigned",
-        by: staff.fullName,
-        sha256_countersigned: sha256,
-      },
-    });
-    if (auditError) {
-      console.error("Countersign audit insert failed", auditError);
-      await releaseClaim();
-      return {
-        ok: false,
-        error: "Recording the audit event failed — nothing was finalized; try again.",
-      };
-    }
-
-    // Finalize only while still holding the claim: the real countersigned_at,
-    // the new hash, and the lock release land in one conditional write.
-    // Checked and retried once — Supabase returns errors rather than
-    // throwing, and reporting success with a stale sha256_final would
-    // misrepresent the stored document. Zero rows without an error means
-    // the claim expired mid-attempt and another session took over.
+    // Finalize atomically in one database transaction (countersign_finalize,
+    // migration 00008): the claim-conditional metadata update and the audit
+    // event insert commit together or not at all — an attempt that lost its
+    // lease can neither finalize nor leave a stray countersign event in the
+    // immutable trail. Checked and retried once (Supabase returns errors
+    // rather than throwing); false means the lease expired mid-attempt and
+    // another session took over, with nothing recorded by this one.
     const finalize = () =>
-      supabase
-        .from("applications")
-        .update({
-          final_pdf_path: finalPath,
-          sha256_final: sha256,
-          countersigned_at: claimTs,
-          countersign_claimed_at: null,
-        })
-        .eq("id", application.id)
-        .eq("countersign_claimed_at", claimTs)
-        .select("id");
+      supabase.rpc("countersign_finalize", {
+        p_application_id: application.id,
+        p_claim_ts: claimTs,
+        p_final_path: finalPath,
+        p_sha256: sha256,
+        p_org_id: application.org_id,
+        p_meta: {
+          action: "countersigned",
+          by: staff.fullName,
+          sha256_countersigned: sha256,
+        },
+      });
     let { data: finalized, error: metaError } = await finalize();
     if (metaError) {
       ({ data: finalized, error: metaError } = await finalize());
     }
     if (metaError) {
-      console.error("Countersign metadata update failed", metaError);
+      console.error("Countersign finalization failed", metaError);
       await releaseClaim();
       return {
         ok: false,
@@ -582,7 +559,7 @@ export async function countersignApplication(input: {
           "Recording the countersignature failed — nothing was finalized; try again.",
       };
     }
-    if (!finalized || finalized.length === 0) {
+    if (!finalized) {
       return {
         ok: false,
         error: "This countersign attempt expired and another session took over.",
