@@ -26,7 +26,7 @@ export default async function ApplicationPage({
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, status, data, filled_pdf_path, final_pdf_path, sha256_final, created_at, certified_pdf_path, forza_placements, countersigned_at, programs(code, name), templates(id, storage_path), worksheets(id, customers(business_name))"
+      "id, status, data, filled_pdf_path, final_pdf_path, sha256_final, created_at, working_pdf_path, forza_placements, countersigned_at, programs(code, name), templates(id, storage_path), worksheets(id, customers(business_name))"
     )
     .eq("id", id)
     .maybeSingle();
@@ -112,7 +112,7 @@ export default async function ApplicationPage({
           email: String(application.data?.["owner.email"] ?? ""),
         }}
         canCountersign={
-          Boolean(application.certified_pdf_path) &&
+          Boolean(application.working_pdf_path) &&
           Array.isArray(application.forza_placements) &&
           application.forza_placements.length > 0
         }

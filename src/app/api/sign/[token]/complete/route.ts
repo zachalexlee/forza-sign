@@ -156,10 +156,11 @@ export async function POST(
     console.error("PKCS#7 sealing failed — storing the unsealed certified copy", err);
   }
 
-  // 5. Store the executed copy and finish the lifecycle. The pre-seal
-  // certified copy is kept alongside: countersigning must modify the
-  // document and re-seal, which a PKCS#7-signed file cannot survive.
-  const certifiedPath = `applications/${application.id}/certified.pdf`;
+  // 5. Store the executed copy and finish the lifecycle. The pre-certificate
+  // working copy is kept alongside: countersigning stamps it, rebuilds the
+  // certificate with the new hash and events, and re-seals — a PKCS#7-signed
+  // or certificated file cannot be edited in place.
+  const workingPath = `applications/${application.id}/working.pdf`;
   const { error: uploadError } = await supabase.storage
     .from("final")
     .upload(finalPath, Buffer.from(finalBytes), {
@@ -169,9 +170,12 @@ export async function POST(
   if (uploadError) {
     return NextResponse.json({ error: "store_failed" }, { status: 500 });
   }
-  await supabase.storage
+  // If this upload fails, completion proceeds but countersign support is
+  // withheld (path + placements stay null) instead of enabling a button
+  // that would always fail on the missing working copy.
+  const { error: workingError } = await supabase.storage
     .from("final")
-    .upload(certifiedPath, Buffer.from(certifiedBytes), {
+    .upload(workingPath, Buffer.from(stamped.pdfBytes), {
       contentType: "application/pdf",
       upsert: true,
     });
@@ -191,8 +195,8 @@ export async function POST(
     .update({
       status: "completed",
       final_pdf_path: finalPath,
-      certified_pdf_path: certifiedPath,
-      forza_placements: stamped.forzaPlacements,
+      working_pdf_path: workingError ? null : workingPath,
+      forza_placements: workingError ? null : stamped.forzaPlacements,
       sha256_final: sha256,
       completed_at: signedAt.toISOString(),
     })

@@ -11,7 +11,7 @@ import { sendEmail, signingRequestEmail } from "@/lib/email";
 import { WorksheetData } from "@/lib/fields/types";
 import { signingUrl } from "@/lib/signing";
 import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
-import { PlacementRect, sha256Hex, stampCountersignature } from "@/lib/pdf/stamp";
+import { PlacementRect, appendCertificatePage, sha256Hex, stampCountersignature } from "@/lib/pdf/stamp";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SIGNING_TOKEN_TTL_DAYS, generateToken, tokenExpiry } from "@/lib/tokens";
@@ -363,9 +363,10 @@ export async function reviseAndResend(
 
 /**
  * Forza countersignature: stamp the office signature over the Forza-signer
- * lines of a completed application, then re-seal and replace the executed
- * copy. Works from the stored pre-seal certified copy — a PKCS#7-signed
- * file cannot be modified without breaking its seal.
+ * lines of a completed application, rebuild the certificate page with the
+ * new content hash and the countersign event, re-seal, and replace the
+ * executed copy. Works from the stored pre-certificate working copy — a
+ * certificated or PKCS#7-sealed file cannot be edited in place.
  */
 export async function countersignApplication(input: {
   applicationId: string;
@@ -380,7 +381,9 @@ export async function countersignApplication(input: {
 
   const { data: application } = await supabase
     .from("applications")
-    .select("id, org_id, status, certified_pdf_path, forza_placements, countersigned_at")
+    .select(
+      "id, org_id, status, working_pdf_path, forza_placements, countersigned_at, programs(name), worksheets(customers(business_name)), signers(name, email, sign_order)"
+    )
     .eq("id", input.applicationId)
     .single();
   if (!application || application.org_id !== staff.orgId) {
@@ -389,11 +392,8 @@ export async function countersignApplication(input: {
   if (application.status !== "completed") {
     return { ok: false, error: "Only completed applications can be countersigned" };
   }
-  if (application.countersigned_at) {
-    return { ok: false, error: "Already countersigned" };
-  }
   const placements = (application.forza_placements ?? []) as PlacementRect[];
-  if (!application.certified_pdf_path || placements.length === 0) {
+  if (!application.working_pdf_path || placements.length === 0) {
     return {
       ok: false,
       error:
@@ -401,60 +401,133 @@ export async function countersignApplication(input: {
     };
   }
 
-  const { data: certified } = await supabase.storage
-    .from("final")
-    .download(application.certified_pdf_path);
-  if (!certified) return { ok: false, error: "Stored document not found" };
-
+  // Claim the countersignature slot atomically: two concurrent staff
+  // sessions must not both stamp and race to overwrite the executed copy.
   const signedAt = new Date();
-  const countersigned = await stampCountersignature(
-    await certified.arrayBuffer(),
-    placements,
-    signaturePng,
-    signedAt
-  );
-  const sealed = await digitallySignIfConfigured(
-    countersigned,
-    `Countersigned by ${staff.fullName} for Forza Payments`
-  );
-
-  const finalPath = `applications/${application.id}/executed.pdf`;
-  const { error: uploadError } = await supabase.storage
-    .from("final")
-    .upload(finalPath, Buffer.from(sealed), {
-      contentType: "application/pdf",
-      upsert: true,
-    });
-  if (uploadError) return { ok: false, error: `Store failed: ${uploadError.message}` };
-  // The certified working copy advances too, so a future re-seal starts
-  // from the countersigned content.
-  await supabase.storage
-    .from("final")
-    .upload(application.certified_pdf_path, Buffer.from(countersigned), {
-      contentType: "application/pdf",
-      upsert: true,
-    });
-
-  await supabase
+  const { data: claimed } = await supabase
     .from("applications")
     .update({
       countersigned_at: signedAt.toISOString(),
       countersigned_by: staff.userId,
-      final_pdf_path: finalPath,
     })
-    .eq("id", application.id);
+    .eq("id", application.id)
+    .is("countersigned_at", null)
+    .select("id");
+  if (!claimed || claimed.length === 0) {
+    return { ok: false, error: "Already countersigned" };
+  }
+  const releaseClaim = () =>
+    supabase
+      .from("applications")
+      .update({ countersigned_at: null, countersigned_by: null })
+      .eq("id", application.id)
+      .eq("countersigned_by", staff.userId);
 
-  await logAuditEvent({
-    event_type: "signed",
-    org_id: application.org_id,
-    application_id: application.id,
-    meta: {
-      action: "countersigned",
-      by: staff.fullName,
-      sha256_countersigned: sha256Hex(new Uint8Array(countersigned)),
-    },
-  });
+  try {
+    const { data: working } = await supabase.storage
+      .from("final")
+      .download(application.working_pdf_path);
+    if (!working) {
+      await releaseClaim();
+      return { ok: false, error: "Stored document not found" };
+    }
 
-  revalidatePath(`/admin/applications/${application.id}`);
-  return { ok: true };
+    const countersigned = await stampCountersignature(
+      await working.arrayBuffer(),
+      placements,
+      signaturePng,
+      signedAt
+    );
+    const sha256 = sha256Hex(new Uint8Array(countersigned));
+
+    // Certificate rebuilt from scratch: new hash + full history including
+    // the countersign event (inserted into the audit table after the
+    // uploads succeed, with this same timestamp).
+    const { data: events } = await supabase
+      .from("audit_events")
+      .select("event_type, ts, ip, meta")
+      .eq("application_id", application.id)
+      .order("ts", { ascending: true })
+      .limit(500);
+    const countersignEvent = {
+      event_type: "signed",
+      ts: signedAt.toISOString(),
+      ip: null,
+      detail: `countersigned by ${staff.fullName}`,
+    };
+    const programName = (application.programs as unknown as { name: string } | null)?.name;
+    const businessName =
+      (application.worksheets as unknown as { customers: { business_name: string } | null } | null)
+        ?.customers?.business_name ?? "the business";
+    const signerRows = (application.signers ?? []) as { name: string; email: string; sign_order: number }[];
+    const primarySigner = [...signerRows].sort((a, b) => a.sign_order - b.sign_order)[0];
+
+    const certified = await appendCertificatePage(new Uint8Array(countersigned), {
+      documentTitle: `${programName ?? "ATM Application"} — ${businessName}`,
+      applicationId: application.id,
+      sha256,
+      signer: primarySigner ?? { name: "—", email: "—" },
+      events: [
+        ...(events ?? []).map((e) => ({
+          event_type: e.event_type as string,
+          ts: e.ts as string,
+          ip: e.ip as string | null,
+          detail: (e.meta as { action?: string })?.action,
+        })),
+        countersignEvent,
+      ],
+    });
+
+    let sealed: Uint8Array = certified;
+    try {
+      sealed = await digitallySignIfConfigured(
+        certified,
+        `Countersigned by ${staff.fullName} for Forza Payments`
+      );
+    } catch (err) {
+      console.error("PKCS#7 sealing failed on countersign — storing unsealed", err);
+    }
+
+    const finalPath = `applications/${application.id}/executed.pdf`;
+    const { error: uploadError } = await supabase.storage
+      .from("final")
+      .upload(finalPath, Buffer.from(sealed), {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+    if (uploadError) {
+      await releaseClaim();
+      return { ok: false, error: `Store failed: ${uploadError.message}` };
+    }
+    // Advance the working copy so any future rebuild starts from the
+    // countersigned content.
+    await supabase.storage
+      .from("final")
+      .upload(application.working_pdf_path, Buffer.from(countersigned), {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+
+    await supabase
+      .from("applications")
+      .update({ final_pdf_path: finalPath, sha256_final: sha256 })
+      .eq("id", application.id);
+
+    await logAuditEvent({
+      event_type: "signed",
+      org_id: application.org_id,
+      application_id: application.id,
+      meta: {
+        action: "countersigned",
+        by: staff.fullName,
+        sha256_countersigned: sha256,
+      },
+    });
+
+    revalidatePath(`/admin/applications/${application.id}`);
+    return { ok: true };
+  } catch (err) {
+    await releaseClaim();
+    throw err;
+  }
 }
