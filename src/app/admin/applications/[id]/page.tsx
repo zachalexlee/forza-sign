@@ -15,10 +15,18 @@ export default async function ApplicationPage({
   const { id } = await params;
   const supabase = await createClient();
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { data: staffRow } = user
+    ? await supabase.from("staff_users").select("full_name").eq("id", user.id).single()
+    : { data: null };
+  const staffName = staffRow?.full_name ?? "Forza Payments";
+
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, status, data, filled_pdf_path, final_pdf_path, sha256_final, created_at, programs(code, name), templates(id, storage_path), worksheets(id, customers(business_name))"
+      "id, status, data, filled_pdf_path, final_pdf_path, sha256_final, created_at, certified_pdf_path, forza_placements, countersigned_at, programs(code, name), templates(id, storage_path), worksheets(id, customers(business_name))"
     )
     .eq("id", id)
     .maybeSingle();
@@ -103,6 +111,13 @@ export default async function ApplicationPage({
           name: String(application.data?.["owner.legal_name"] ?? ""),
           email: String(application.data?.["owner.email"] ?? ""),
         }}
+        canCountersign={
+          Boolean(application.certified_pdf_path) &&
+          Array.isArray(application.forza_placements) &&
+          application.forza_placements.length > 0
+        }
+        countersignedAt={application.countersigned_at}
+        staffName={staffName}
       />
       <HistoryTimeline events={events} />
     </div>

@@ -10,6 +10,8 @@ import { logAuditEvent } from "@/lib/audit";
 import { sendEmail, signingRequestEmail } from "@/lib/email";
 import { WorksheetData } from "@/lib/fields/types";
 import { signingUrl } from "@/lib/signing";
+import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
+import { PlacementRect, sha256Hex, stampCountersignature } from "@/lib/pdf/stamp";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SIGNING_TOKEN_TTL_DAYS, generateToken, tokenExpiry } from "@/lib/tokens";
@@ -357,4 +359,102 @@ export async function reviseAndResend(
   await regenerateFilledPdf(fresh.id);
   revalidatePath("/admin/applications");
   return { applicationId: fresh.id };
+}
+
+/**
+ * Forza countersignature: stamp the office signature over the Forza-signer
+ * lines of a completed application, then re-seal and replace the executed
+ * copy. Works from the stored pre-seal certified copy — a PKCS#7-signed
+ * file cannot be modified without breaking its seal.
+ */
+export async function countersignApplication(input: {
+  applicationId: string;
+  signaturePngDataUrl: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const staff = await requireStaff();
+  const supabase = createAdminClient();
+
+  const pngMatch = input.signaturePngDataUrl.match(/^data:image\/png;base64,(.+)$/);
+  if (!pngMatch) return { ok: false, error: "Signature must be a PNG" };
+  const signaturePng = new Uint8Array(Buffer.from(pngMatch[1], "base64"));
+
+  const { data: application } = await supabase
+    .from("applications")
+    .select("id, org_id, status, certified_pdf_path, forza_placements, countersigned_at")
+    .eq("id", input.applicationId)
+    .single();
+  if (!application || application.org_id !== staff.orgId) {
+    return { ok: false, error: "Application not found" };
+  }
+  if (application.status !== "completed") {
+    return { ok: false, error: "Only completed applications can be countersigned" };
+  }
+  if (application.countersigned_at) {
+    return { ok: false, error: "Already countersigned" };
+  }
+  const placements = (application.forza_placements ?? []) as PlacementRect[];
+  if (!application.certified_pdf_path || placements.length === 0) {
+    return {
+      ok: false,
+      error:
+        "This application predates countersign support — no Forza signature positions were captured when it was signed.",
+    };
+  }
+
+  const { data: certified } = await supabase.storage
+    .from("final")
+    .download(application.certified_pdf_path);
+  if (!certified) return { ok: false, error: "Stored document not found" };
+
+  const signedAt = new Date();
+  const countersigned = await stampCountersignature(
+    await certified.arrayBuffer(),
+    placements,
+    signaturePng,
+    signedAt
+  );
+  const sealed = await digitallySignIfConfigured(
+    countersigned,
+    `Countersigned by ${staff.fullName} for Forza Payments`
+  );
+
+  const finalPath = `applications/${application.id}/executed.pdf`;
+  const { error: uploadError } = await supabase.storage
+    .from("final")
+    .upload(finalPath, Buffer.from(sealed), {
+      contentType: "application/pdf",
+      upsert: true,
+    });
+  if (uploadError) return { ok: false, error: `Store failed: ${uploadError.message}` };
+  // The certified working copy advances too, so a future re-seal starts
+  // from the countersigned content.
+  await supabase.storage
+    .from("final")
+    .upload(application.certified_pdf_path, Buffer.from(countersigned), {
+      contentType: "application/pdf",
+      upsert: true,
+    });
+
+  await supabase
+    .from("applications")
+    .update({
+      countersigned_at: signedAt.toISOString(),
+      countersigned_by: staff.userId,
+      final_pdf_path: finalPath,
+    })
+    .eq("id", application.id);
+
+  await logAuditEvent({
+    event_type: "signed",
+    org_id: application.org_id,
+    application_id: application.id,
+    meta: {
+      action: "countersigned",
+      by: staff.fullName,
+      sha256_countersigned: sha256Hex(new Uint8Array(countersigned)),
+    },
+  });
+
+  revalidatePath(`/admin/applications/${application.id}`);
+  return { ok: true };
 }

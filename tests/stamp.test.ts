@@ -48,10 +48,37 @@ describe("stampAndFlatten", () => {
     expect(result.stampedPlacements).toBe(2); // Owner Signature + By X
     expect(result.skippedPlacements).toBe(1); // the placement with no field
 
+    // Forza-signer rectangle captured for the later countersign pass.
+    expect(result.forzaPlacements).toHaveLength(1);
+    expect(result.forzaPlacements[0].pageIndex).toBe(0);
+    expect(result.forzaPlacements[0].x).toBeCloseTo(300, -1);
+    expect(result.forzaPlacements[0].y).toBeCloseTo(100, -1);
+
     // Flattened: no interactive fields remain (§7.4 integrity).
     const doc = await PDFDocument.load(result.pdfBytes);
     expect(doc.getForm().getFields()).toHaveLength(0);
     expect(doc.getPageCount()).toBe(2);
+  });
+
+  it("countersigns the flattened document at the captured rectangles", async () => {
+    const { stampCountersignature } = await import("@/lib/pdf/stamp");
+    const stamped = await stampAndFlatten({
+      filledPdf: await fixturePdf(),
+      map,
+      signaturePng: new Uint8Array(TINY_PNG),
+      signerName: "Jordan Smith",
+      signedAt: new Date("2026-09-01T12:00:00Z"),
+    });
+    const countersigned = await stampCountersignature(
+      stamped.pdfBytes,
+      stamped.forzaPlacements,
+      new Uint8Array(TINY_PNG),
+      new Date("2026-09-02T12:00:00Z")
+    );
+    expect(countersigned.length).toBeGreaterThan(stamped.pdfBytes.length);
+    const doc = await PDFDocument.load(countersigned);
+    expect(doc.getPageCount()).toBe(2);
+    expect(doc.getForm().getFields()).toHaveLength(0); // still flat
   });
 });
 

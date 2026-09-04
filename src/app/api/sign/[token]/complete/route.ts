@@ -147,7 +147,10 @@ export async function POST(
     `Executed by ${signer.name} via Forza Sign`
   );
 
-  // 5. Store the executed copy and finish the lifecycle.
+  // 5. Store the executed copy and finish the lifecycle. The pre-seal
+  // certified copy is kept alongside: countersigning must modify the
+  // document and re-seal, which a PKCS#7-signed file cannot survive.
+  const certifiedPath = `applications/${application.id}/certified.pdf`;
   const { error: uploadError } = await supabase.storage
     .from("final")
     .upload(finalPath, Buffer.from(finalBytes), {
@@ -157,6 +160,12 @@ export async function POST(
   if (uploadError) {
     return NextResponse.json({ error: "store_failed" }, { status: 500 });
   }
+  await supabase.storage
+    .from("final")
+    .upload(certifiedPath, Buffer.from(certifiedBytes), {
+      contentType: "application/pdf",
+      upsert: true,
+    });
 
   await supabase
     .from("signers")
@@ -173,6 +182,8 @@ export async function POST(
     .update({
       status: "completed",
       final_pdf_path: finalPath,
+      certified_pdf_path: certifiedPath,
+      forza_placements: stamped.forzaPlacements,
       sha256_final: sha256,
       completed_at: signedAt.toISOString(),
     })

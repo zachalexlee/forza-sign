@@ -2,9 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { SignatureModal } from "@/components/signing/SignatureModal";
 import { FieldInput } from "@/components/worksheet/FieldInput";
 import { FieldDefinition, WorksheetData } from "@/lib/fields/types";
 import {
+  countersignApplication,
   reviseAndResend,
   sendForSignature,
   updateApplicationData,
@@ -23,6 +25,9 @@ interface ApplicationEditorProps {
   sha256Final: string | null;
   signers: { name: string; email: string; status: string; signedAt: string | null }[];
   suggestedSigner: { name: string; email: string };
+  canCountersign: boolean;
+  countersignedAt: string | null;
+  staffName: string;
 }
 
 export function ApplicationEditor({
@@ -36,6 +41,9 @@ export function ApplicationEditor({
   sha256Final,
   signers,
   suggestedSigner,
+  canCountersign,
+  countersignedAt,
+  staffName,
 }: ApplicationEditorProps) {
   const router = useRouter();
   const [overrides, setOverrides] = useState<WorksheetData>({});
@@ -49,6 +57,7 @@ export function ApplicationEditor({
   // Bumped after every regeneration so the preview iframe re-fetches the PDF
   // (the route URL is otherwise stable and the iframe would show stale bytes).
   const [pdfRev, setPdfRev] = useState(0);
+  const [countersignOpen, setCountersignOpen] = useState(false);
 
   async function save() {
     setPending(true);
@@ -221,6 +230,51 @@ export function ApplicationEditor({
             <p className="mt-2 break-all text-xs text-zinc-400">
               SHA-256: {sha256Final}
             </p>
+          )}
+
+          {status === "completed" && canCountersign && !countersignedAt && (
+            <div className="mt-3">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setCountersignOpen(true)}
+                className="btn-dark w-full"
+              >
+                Countersign as Forza
+              </button>
+              <p className="mt-1 text-xs text-zinc-500">
+                Stamps the Forza signature lines and re-seals the executed PDF.
+              </p>
+            </div>
+          )}
+          {countersignedAt && (
+            <p className="mt-2 text-sm text-green-700">
+              Countersigned {new Date(countersignedAt).toLocaleString()}
+            </p>
+          )}
+          {countersignOpen && (
+            <SignatureModal
+              signerName={staffName}
+              onClose={() => setCountersignOpen(false)}
+              onAdopt={async (pngDataUrl) => {
+                setCountersignOpen(false);
+                setPending(true);
+                setMessage(null);
+                try {
+                  const result = await countersignApplication({
+                    applicationId,
+                    signaturePngDataUrl: pngDataUrl,
+                  });
+                  setMessage(result.ok ? "Countersigned ✓" : result.error ?? "Countersign failed");
+                  setPdfRev((r) => r + 1);
+                  router.refresh();
+                } catch (err) {
+                  setMessage(err instanceof Error ? err.message : "Countersign failed");
+                } finally {
+                  setPending(false);
+                }
+              }}
+            />
           )}
           {link && (
             <code className="mt-2 block truncate rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs">
