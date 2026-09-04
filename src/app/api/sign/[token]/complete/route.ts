@@ -141,11 +141,20 @@ export async function POST(
   });
 
   // Cryptographically seal the executed copy when a signing certificate is
-  // configured — the file then self-verifies in PDF viewers.
-  const finalBytes = await digitallySignIfConfigured(
-    certifiedBytes,
-    `Executed by ${signer.name} via Forza Sign`
-  );
+  // configured — the file then self-verifies in PDF viewers. A sealing
+  // failure (bad P12, wrong passphrase) must never block a completed
+  // signature: immutable audit events are already recorded, and failing
+  // here would strand the application and duplicate them on retry. Fall
+  // back to the certified copy and surface the error in the logs.
+  let finalBytes = certifiedBytes;
+  try {
+    finalBytes = await digitallySignIfConfigured(
+      certifiedBytes,
+      `Executed by ${signer.name} via Forza Sign`
+    );
+  } catch (err) {
+    console.error("PKCS#7 sealing failed — storing the unsealed certified copy", err);
+  }
 
   // 5. Store the executed copy and finish the lifecycle. The pre-seal
   // certified copy is kept alongside: countersigning must modify the
