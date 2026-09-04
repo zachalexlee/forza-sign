@@ -25,6 +25,17 @@ begin
      and countersign_claimed_at = p_claim_ts;
   get diagnostics v_updated = row_count;
   if v_updated = 0 then
+    -- Idempotent retry: the first call may have committed while its
+    -- response was lost. If this exact claim already finalized, that
+    -- earlier commit (including its audit event) stands — report success.
+    if exists (
+      select 1 from applications
+       where id = p_application_id
+         and countersigned_at = p_claim_ts
+         and final_pdf_path = p_final_path
+    ) then
+      return true;
+    end if;
     return false; -- lease lost: another attempt took over, nothing recorded
   end if;
   insert into audit_events (event_type, org_id, application_id, ts, meta)
