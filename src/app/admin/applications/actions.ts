@@ -510,7 +510,11 @@ export async function countersignApplication(input: {
       console.error("PKCS#7 sealing failed on countersign — storing unsealed", err);
     }
 
-    const finalPath = `applications/${application.id}/executed.pdf`;
+    // Attempt-specific object: an attempt whose lease expired must not be
+    // able to overwrite the live executed copy after another session has
+    // finalized — the path only becomes live through the conditional
+    // finalize below, so an expired attempt just leaves an orphan.
+    const finalPath = `applications/${application.id}/executed-${signedAt.getTime()}.pdf`;
     const { error: uploadError } = await supabase.storage
       .from("final")
       .upload(finalPath, Buffer.from(sealed), {
@@ -520,6 +524,31 @@ export async function countersignApplication(input: {
     if (uploadError) {
       await releaseClaim();
       return { ok: false, error: `Store failed: ${uploadError.message}` };
+    }
+
+    // Record the countersign event durably BEFORE finalizing, and checked —
+    // the replacement certificate already prints this event, so the database
+    // trail must not silently omit it. On failure nothing is finalized: the
+    // claim is released and a retry re-runs cleanly (a leftover event from a
+    // failed attempt is an honest record of that attempt).
+    const { error: auditError } = await supabase.from("audit_events").insert({
+      event_type: "signed",
+      org_id: application.org_id,
+      application_id: application.id,
+      ts: claimTs,
+      meta: {
+        action: "countersigned",
+        by: staff.fullName,
+        sha256_countersigned: sha256,
+      },
+    });
+    if (auditError) {
+      console.error("Countersign audit insert failed", auditError);
+      await releaseClaim();
+      return {
+        ok: false,
+        error: "Recording the audit event failed — nothing was finalized; try again.",
+      };
     }
 
     // Finalize only while still holding the claim: the real countersigned_at,
@@ -572,17 +601,6 @@ export async function countersignApplication(input: {
     if (advanceError) {
       console.error("Working-copy advance failed after countersign", advanceError);
     }
-
-    await logAuditEvent({
-      event_type: "signed",
-      org_id: application.org_id,
-      application_id: application.id,
-      meta: {
-        action: "countersigned",
-        by: staff.fullName,
-        sha256_countersigned: sha256,
-      },
-    });
 
     revalidatePath(`/admin/applications/${application.id}`);
     return { ok: true };
