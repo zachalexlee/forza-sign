@@ -8,6 +8,15 @@ import { TemplateMap } from "./types";
  * flatten so nothing is editable, hash, and append the audit certificate.
  */
 
+/**
+ * Dates printed beside signatures use the office timezone — the UTC-hosted
+ * server would otherwise print tomorrow's date for a late-afternoon Pacific
+ * signing, disagreeing with the audit trail shown in admin.
+ */
+function stampDate(d: Date): string {
+  return d.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles" });
+}
+
 export interface StampInput {
   filledPdf: Uint8Array | ArrayBuffer;
   map: TemplateMap;
@@ -135,7 +144,7 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
     const scale = height / png.height;
     const width = Math.min(png.width * scale, rect.width || 160);
     page.drawImage(png, { x: rect.x, y: rect.y, width, height });
-    page.drawText(input.signedAt.toLocaleDateString("en-US"), {
+    page.drawText(stampDate(input.signedAt), {
       x: rect.x + width + 8,
       y: rect.y + 2,
       size: 8,
@@ -174,7 +183,7 @@ export async function stampCountersignature(
     const scale = height / png.height;
     const width = Math.min(png.width * scale, rect.width || 160);
     page.drawImage(png, { x: rect.x, y: rect.y, width, height });
-    page.drawText(signedAt.toLocaleDateString("en-US"), {
+    page.drawText(stampDate(signedAt), {
       x: rect.x + width + 8,
       y: rect.y + 2,
       size: 8,

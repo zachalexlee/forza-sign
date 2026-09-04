@@ -442,13 +442,15 @@ export async function countersignApplication(input: {
 
     // Certificate rebuilt from scratch: new hash + full history including
     // the countersign event (inserted into the audit table after the
-    // uploads succeed, with this same timestamp).
-    const { data: events } = await supabase
+    // uploads succeed, with this same timestamp). Newest 500 — capping an
+    // ascending fetch would drop the completion tail, not old noise.
+    const { data: eventsDesc } = await supabase
       .from("audit_events")
       .select("event_type, ts, ip, meta")
       .eq("application_id", application.id)
-      .order("ts", { ascending: true })
+      .order("ts", { ascending: false })
       .limit(500);
+    const events = (eventsDesc ?? []).reverse();
     const countersignEvent = {
       event_type: "signed",
       ts: signedAt.toISOString(),
@@ -468,7 +470,7 @@ export async function countersignApplication(input: {
       sha256,
       signer: primarySigner ?? { name: "—", email: "—" },
       events: [
-        ...(events ?? []).map((e) => ({
+        ...events.map((e) => ({
           event_type: e.event_type as string,
           ts: e.ts as string,
           ip: e.ip as string | null,
@@ -508,10 +510,30 @@ export async function countersignApplication(input: {
         upsert: true,
       });
 
-    await supabase
+    // The stored PDF is already replaced, so this write must land or the
+    // recorded hash no longer matches the document. Supabase returns errors
+    // rather than throwing — check, retry once, and report failure honestly
+    // (the claim stays: the document IS countersigned in storage, and a
+    // second stamping pass would double-print the signature).
+    let { error: metaError } = await supabase
       .from("applications")
       .update({ final_pdf_path: finalPath, sha256_final: sha256 })
       .eq("id", application.id);
+    if (metaError) {
+      ({ error: metaError } = await supabase
+        .from("applications")
+        .update({ final_pdf_path: finalPath, sha256_final: sha256 })
+        .eq("id", application.id));
+    }
+    if (metaError) {
+      console.error("Countersign metadata update failed", metaError);
+      return {
+        ok: false,
+        error:
+          "The document was countersigned and stored, but recording its new hash failed — reload the page; if the SHA-256 shown doesn't end in " +
+          `${sha256.slice(-8)}, contact support.`,
+      };
+    }
 
     await logAuditEvent({
       event_type: "signed",
