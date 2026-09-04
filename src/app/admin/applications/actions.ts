@@ -401,27 +401,38 @@ export async function countersignApplication(input: {
     };
   }
 
+  if (application.countersigned_at) {
+    return { ok: false, error: "Already countersigned" };
+  }
+
   // Claim the countersignature slot atomically: two concurrent staff
   // sessions must not both stamp and race to overwrite the executed copy.
+  // The claim is a separate, EXPIRING lock — the real countersigned_at is
+  // written only after the replacement document is stored, so a crash
+  // mid-attempt never leaves the application permanently "countersigned"
+  // with an unchanged PDF: the stale claim ages out and a retry proceeds.
   const signedAt = new Date();
+  const claimTs = signedAt.toISOString();
+  const staleCutoff = new Date(signedAt.getTime() - 10 * 60 * 1000).toISOString();
   const { data: claimed } = await supabase
     .from("applications")
-    .update({
-      countersigned_at: signedAt.toISOString(),
-      countersigned_by: staff.userId,
-    })
+    .update({ countersign_claimed_at: claimTs, countersigned_by: staff.userId })
     .eq("id", application.id)
     .is("countersigned_at", null)
+    .or(`countersign_claimed_at.is.null,countersign_claimed_at.lt.${staleCutoff}`)
     .select("id");
   if (!claimed || claimed.length === 0) {
-    return { ok: false, error: "Already countersigned" };
+    return {
+      ok: false,
+      error: "Already countersigned, or a countersign attempt is in progress",
+    };
   }
   const releaseClaim = () =>
     supabase
       .from("applications")
-      .update({ countersigned_at: null, countersigned_by: null })
+      .update({ countersign_claimed_at: null, countersigned_by: null })
       .eq("id", application.id)
-      .eq("countersigned_by", staff.userId);
+      .eq("countersign_claimed_at", claimTs);
 
   try {
     const { data: working } = await supabase.storage
@@ -443,13 +454,22 @@ export async function countersignApplication(input: {
     // Certificate rebuilt from scratch: new hash + full history including
     // the countersign event (inserted into the audit table after the
     // uploads succeed, with this same timestamp). Newest 500 — capping an
-    // ascending fetch would drop the completion tail, not old noise.
-    const { data: eventsDesc } = await supabase
+    // ascending fetch would drop the completion tail, not old noise. A
+    // failed read must abort: silently rebuilding from an empty list would
+    // strip the certified history from the stored legal copy.
+    const { data: eventsDesc, error: eventsError } = await supabase
       .from("audit_events")
       .select("event_type, ts, ip, meta")
       .eq("application_id", application.id)
       .order("ts", { ascending: false })
       .limit(500);
+    if (eventsError) {
+      await releaseClaim();
+      return {
+        ok: false,
+        error: "Could not load the audit history — nothing was changed; try again.",
+      };
+    }
     const events = (eventsDesc ?? []).reverse();
     const countersignEvent = {
       event_type: "signed",
@@ -501,38 +521,56 @@ export async function countersignApplication(input: {
       await releaseClaim();
       return { ok: false, error: `Store failed: ${uploadError.message}` };
     }
+
+    // Finalize only while still holding the claim: the real countersigned_at,
+    // the new hash, and the lock release land in one conditional write.
+    // Checked and retried once — Supabase returns errors rather than
+    // throwing, and reporting success with a stale sha256_final would
+    // misrepresent the stored document. Zero rows without an error means
+    // the claim expired mid-attempt and another session took over.
+    const finalize = () =>
+      supabase
+        .from("applications")
+        .update({
+          final_pdf_path: finalPath,
+          sha256_final: sha256,
+          countersigned_at: claimTs,
+          countersign_claimed_at: null,
+        })
+        .eq("id", application.id)
+        .eq("countersign_claimed_at", claimTs)
+        .select("id");
+    let { data: finalized, error: metaError } = await finalize();
+    if (metaError) {
+      ({ data: finalized, error: metaError } = await finalize());
+    }
+    if (metaError) {
+      console.error("Countersign metadata update failed", metaError);
+      await releaseClaim();
+      return {
+        ok: false,
+        error:
+          "Recording the countersignature failed — nothing was finalized; try again.",
+      };
+    }
+    if (!finalized || finalized.length === 0) {
+      return {
+        ok: false,
+        error: "This countersign attempt expired and another session took over.",
+      };
+    }
+
     // Advance the working copy so any future rebuild starts from the
-    // countersigned content.
-    await supabase.storage
+    // countersigned content. Only after finalizing — a failed attempt must
+    // leave the pre-countersign copy in place for a clean re-stamp.
+    const { error: advanceError } = await supabase.storage
       .from("final")
       .upload(application.working_pdf_path, Buffer.from(countersigned), {
         contentType: "application/pdf",
         upsert: true,
       });
-
-    // The stored PDF is already replaced, so this write must land or the
-    // recorded hash no longer matches the document. Supabase returns errors
-    // rather than throwing — check, retry once, and report failure honestly
-    // (the claim stays: the document IS countersigned in storage, and a
-    // second stamping pass would double-print the signature).
-    let { error: metaError } = await supabase
-      .from("applications")
-      .update({ final_pdf_path: finalPath, sha256_final: sha256 })
-      .eq("id", application.id);
-    if (metaError) {
-      ({ error: metaError } = await supabase
-        .from("applications")
-        .update({ final_pdf_path: finalPath, sha256_final: sha256 })
-        .eq("id", application.id));
-    }
-    if (metaError) {
-      console.error("Countersign metadata update failed", metaError);
-      return {
-        ok: false,
-        error:
-          "The document was countersigned and stored, but recording its new hash failed — reload the page; if the SHA-256 shown doesn't end in " +
-          `${sha256.slice(-8)}, contact support.`,
-      };
+    if (advanceError) {
+      console.error("Working-copy advance failed after countersign", advanceError);
     }
 
     await logAuditEvent({
