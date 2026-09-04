@@ -6,6 +6,7 @@ import {
   hasStampableCustomerSignature,
   resolveTemplateMap,
 } from "@/lib/pdf/resolve-map";
+import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
 import { appendCertificatePage, sha256Hex, stampAndFlatten } from "@/lib/pdf/stamp";
 import { validateSigningToken } from "@/lib/signing";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -126,7 +127,7 @@ export async function POST(
     application.worksheets?.customers?.business_name ?? "the business";
   const documentName = application.programs?.name ?? "ATM Application";
 
-  const finalBytes = await appendCertificatePage(stamped.pdfBytes, {
+  const certifiedBytes = await appendCertificatePage(stamped.pdfBytes, {
     documentTitle: `${documentName} — ${businessName}`,
     applicationId: application.id,
     sha256,
@@ -138,6 +139,13 @@ export async function POST(
       detail: (e.meta as { action?: string })?.action,
     })),
   });
+
+  // Cryptographically seal the executed copy when a signing certificate is
+  // configured — the file then self-verifies in PDF viewers.
+  const finalBytes = await digitallySignIfConfigured(
+    certifiedBytes,
+    `Executed by ${signer.name} via Forza Sign`
+  );
 
   // 5. Store the executed copy and finish the lifecycle.
   const { error: uploadError } = await supabase.storage

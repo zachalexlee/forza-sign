@@ -30,12 +30,14 @@ export default async function ApplicationPage({
     .eq("application_id", id)
     .order("sign_order");
 
-  const { data: events } = await supabase
+  // Newest 200 (never silently drop the signing/completion tail), shown oldest-first.
+  const { data: eventsDesc } = await supabase
     .from("audit_events")
     .select("id, event_type, ts, ip, meta")
     .eq("application_id", id)
-    .order("ts", { ascending: true })
+    .order("ts", { ascending: false })
     .limit(200);
+  const events = (eventsDesc ?? []).reverse();
 
   const { data: allDefs } = await supabase
     .from("field_definitions")
@@ -102,7 +104,7 @@ export default async function ApplicationPage({
           email: String(application.data?.["owner.email"] ?? ""),
         }}
       />
-      <HistoryTimeline events={events ?? []} />
+      <HistoryTimeline events={events} />
     </div>
   );
 }

@@ -11,15 +11,29 @@ const STATUS_BADGES: Record<string, string> = {
   declined: "bg-red-100 text-red-700",
 };
 
-export default async function ApplicationsPage() {
+/** Dashboard-tile filters: pseudo-status "out" = sent or viewed. */
+const STATUS_FILTERS: Record<string, string[]> = {
+  draft: ["draft"],
+  out: ["sent", "viewed"],
+  completed: ["completed"],
+};
+
+export default async function ApplicationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string }>;
+}) {
+  const { status } = await searchParams;
   const supabase = await createClient();
-  const { data: applications } = await supabase
+  let query = supabase
     .from("applications")
     .select(
       "id, status, created_at, filled_pdf_path, programs(name), worksheets(customers(business_name))"
     )
     .order("created_at", { ascending: false })
     .limit(100);
+  if (status && status in STATUS_FILTERS) query = query.in("status", STATUS_FILTERS[status]);
+  const { data: applications } = await query;
 
   return (
     <div>

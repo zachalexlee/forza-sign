@@ -1,4 +1,4 @@
-import { PDFCheckBox, PDFDocument, PDFTextField, StandardFonts } from "pdf-lib";
+import { PDFCheckBox, PDFDocument, PDFTextField, StandardFonts, TextAlignment } from "pdf-lib";
 import { decryptField, isEncrypted } from "@/lib/crypto";
 import { resolveDerived } from "./derived";
 import { FillContext, FillResult, MapEntry, TemplateMap, Transform } from "./types";
@@ -113,6 +113,7 @@ export async function fillPdf(
       }
     } else if (field instanceof PDFTextField) {
       const text = value === true ? "Yes" : String(value);
+      if (entry.align === "center") field.setAlignment(TextAlignment.Center);
       field.setText(text);
       applied[entry.pdf] = text;
     } else {

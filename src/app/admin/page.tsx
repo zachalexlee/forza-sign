@@ -23,39 +23,27 @@ export default async function AdminHome({
   const { status } = await searchParams;
   const supabase = await createClient();
 
-  // Pipeline stats — small tables, count client-side.
-  const [{ data: wsStatuses }, { data: appStatuses }] = await Promise.all([
-    supabase.from("worksheets").select("status"),
-    supabase.from("applications").select("status"),
+  // Pipeline stats — exact server-side counts (row reads are capped at 1000).
+  const count = async (table: "worksheets" | "applications", statuses: string[]) => {
+    const { count: n } = await supabase
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .in("status", statuses);
+    return n ?? 0;
+  };
+  const [awaiting, needsReview, drafts, outForSignature, completed] = await Promise.all([
+    count("worksheets", ["sent", "in_progress"]),
+    count("worksheets", ["submitted"]),
+    count("applications", ["draft"]),
+    count("applications", ["sent", "viewed"]),
+    count("applications", ["completed"]),
   ]);
-  const countOf = (rows: { status: string }[] | null, ...statuses: string[]) =>
-    (rows ?? []).filter((r) => statuses.includes(r.status)).length;
   const stats = [
-    {
-      label: "Awaiting customer",
-      value: countOf(wsStatuses, "sent", "in_progress"),
-      href: "/admin?status=in_progress",
-    },
-    {
-      label: "Needs review",
-      value: countOf(wsStatuses, "submitted"),
-      href: "/admin?status=submitted",
-    },
-    {
-      label: "App drafts",
-      value: countOf(appStatuses, "draft"),
-      href: "/admin/applications",
-    },
-    {
-      label: "Out for signature",
-      value: countOf(appStatuses, "sent"),
-      href: "/admin/applications",
-    },
-    {
-      label: "Completed",
-      value: countOf(appStatuses, "completed"),
-      href: "/admin/applications",
-    },
+    { label: "Awaiting customer", value: awaiting, href: "/admin?status=awaiting" },
+    { label: "Needs review", value: needsReview, href: "/admin?status=submitted" },
+    { label: "App drafts", value: drafts, href: "/admin/applications?status=draft" },
+    { label: "Out for signature", value: outForSignature, href: "/admin/applications?status=out" },
+    { label: "Completed", value: completed, href: "/admin/applications?status=completed" },
   ];
 
   let query = supabase
@@ -63,7 +51,8 @@ export default async function AdminHome({
     .select("id, status, submitted_at, created_at, customers(business_name, contact_name, email)")
     .order("created_at", { ascending: false })
     .limit(100);
-  if (status && status in STATUS_LABELS) query = query.eq("status", status);
+  if (status === "awaiting") query = query.in("status", ["sent", "in_progress"]);
+  else if (status && status in STATUS_LABELS) query = query.eq("status", status);
   const { data: worksheets } = await query;
 
   return (
