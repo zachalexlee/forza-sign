@@ -6,6 +6,7 @@ import {
   hasStampableCustomerSignature,
   resolveTemplateMap,
 } from "@/lib/pdf/resolve-map";
+import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
 import { appendCertificatePage, sha256Hex, stampAndFlatten } from "@/lib/pdf/stamp";
 import { validateSigningToken } from "@/lib/signing";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -126,7 +127,7 @@ export async function POST(
     application.worksheets?.customers?.business_name ?? "the business";
   const documentName = application.programs?.name ?? "ATM Application";
 
-  const finalBytes = await appendCertificatePage(stamped.pdfBytes, {
+  const certifiedBytes = await appendCertificatePage(stamped.pdfBytes, {
     documentTitle: `${documentName} — ${businessName}`,
     applicationId: application.id,
     sha256,
@@ -139,7 +140,27 @@ export async function POST(
     })),
   });
 
-  // 5. Store the executed copy and finish the lifecycle.
+  // Cryptographically seal the executed copy when a signing certificate is
+  // configured — the file then self-verifies in PDF viewers. A sealing
+  // failure (bad P12, wrong passphrase) must never block a completed
+  // signature: immutable audit events are already recorded, and failing
+  // here would strand the application and duplicate them on retry. Fall
+  // back to the certified copy and surface the error in the logs.
+  let finalBytes = certifiedBytes;
+  try {
+    finalBytes = await digitallySignIfConfigured(
+      certifiedBytes,
+      `Executed by ${signer.name} via Forza Sign`
+    );
+  } catch (err) {
+    console.error("PKCS#7 sealing failed — storing the unsealed certified copy", err);
+  }
+
+  // 5. Store the executed copy and finish the lifecycle. The pre-certificate
+  // working copy is kept alongside: countersigning stamps it, rebuilds the
+  // certificate with the new hash and events, and re-seals — a PKCS#7-signed
+  // or certificated file cannot be edited in place.
+  const workingPath = `applications/${application.id}/working.pdf`;
   const { error: uploadError } = await supabase.storage
     .from("final")
     .upload(finalPath, Buffer.from(finalBytes), {
@@ -149,6 +170,15 @@ export async function POST(
   if (uploadError) {
     return NextResponse.json({ error: "store_failed" }, { status: 500 });
   }
+  // If this upload fails, completion proceeds but countersign support is
+  // withheld (path + placements stay null) instead of enabling a button
+  // that would always fail on the missing working copy.
+  const { error: workingError } = await supabase.storage
+    .from("final")
+    .upload(workingPath, Buffer.from(stamped.pdfBytes), {
+      contentType: "application/pdf",
+      upsert: true,
+    });
 
   await supabase
     .from("signers")
@@ -165,6 +195,8 @@ export async function POST(
     .update({
       status: "completed",
       final_pdf_path: finalPath,
+      working_pdf_path: workingError ? null : workingPath,
+      forza_placements: workingError ? null : stamped.forzaPlacements,
       sha256_final: sha256,
       completed_at: signedAt.toISOString(),
     })

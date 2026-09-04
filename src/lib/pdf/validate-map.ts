@@ -77,6 +77,14 @@ export function validateMapEntries(
       entry.transform = e.transform as Transform;
     }
 
+    if (e.align !== undefined && e.align !== "") {
+      if (e.align !== "center") {
+        errors.push(`${pdf}: align must be "center"`);
+        continue;
+      }
+      entry.align = "center";
+    }
+
     if (e.checkbox !== undefined) {
       if (typeof e.checkbox !== "object" || e.checkbox === null) {
         errors.push(`${pdf}: checkbox must be an object like {} or {"equals": value}`);

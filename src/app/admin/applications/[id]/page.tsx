@@ -15,10 +15,18 @@ export default async function ApplicationPage({
   const { id } = await params;
   const supabase = await createClient();
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { data: staffRow } = user
+    ? await supabase.from("staff_users").select("full_name").eq("id", user.id).single()
+    : { data: null };
+  const staffName = staffRow?.full_name ?? "Forza Payments";
+
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, status, data, filled_pdf_path, final_pdf_path, sha256_final, created_at, programs(code, name), templates(id, storage_path), worksheets(id, customers(business_name))"
+      "id, status, data, filled_pdf_path, final_pdf_path, sha256_final, created_at, working_pdf_path, forza_placements, countersigned_at, programs(code, name), templates(id, storage_path), worksheets(id, customers(business_name))"
     )
     .eq("id", id)
     .maybeSingle();
@@ -29,6 +37,15 @@ export default async function ApplicationPage({
     .select("name, email, status, signed_at")
     .eq("application_id", id)
     .order("sign_order");
+
+  // Newest 200 (never silently drop the signing/completion tail), shown oldest-first.
+  const { data: eventsDesc } = await supabase
+    .from("audit_events")
+    .select("id, event_type, ts, ip, meta")
+    .eq("application_id", id)
+    .order("ts", { ascending: false })
+    .limit(200);
+  const events = (eventsDesc ?? []).reverse();
 
   const { data: allDefs } = await supabase
     .from("field_definitions")
@@ -94,7 +111,65 @@ export default async function ApplicationPage({
           name: String(application.data?.["owner.legal_name"] ?? ""),
           email: String(application.data?.["owner.email"] ?? ""),
         }}
+        canCountersign={
+          Boolean(application.working_pdf_path) &&
+          Array.isArray(application.forza_placements) &&
+          application.forza_placements.length > 0
+        }
+        countersignedAt={application.countersigned_at}
+        staffName={staffName}
       />
+      <HistoryTimeline events={events} />
     </div>
+  );
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  created: "Application created",
+  sent: "Sent for signature",
+  email_delivered: "Email delivered",
+  opened: "Signing link opened",
+  consented: "Consented to electronic signing",
+  field_signed: "Field signed",
+  signed: "Signed",
+  completed: "Completed — document sealed",
+  edited: "Edited",
+  voided: "Voided",
+  declined: "Declined",
+  reminder_sent: "Reminder sent",
+};
+
+/** Envelope-history timeline: every audit event on this application. */
+function HistoryTimeline({
+  events,
+}: {
+  events: { id: number; event_type: string; ts: string; ip: string | null; meta: Record<string, unknown> }[];
+}) {
+  if (events.length === 0) return null;
+  return (
+    <section className="mt-10">
+      <h2 className="text-lg font-semibold">Document history</h2>
+      <ol className="mt-4 space-y-0 rounded-lg border border-zinc-200 bg-white">
+        {events.map((e, i) => (
+          <li
+            key={e.id}
+            className={`flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3 text-sm ${
+              i > 0 ? "border-t border-zinc-100" : ""
+            }`}
+          >
+            <span className="w-44 shrink-0 text-xs text-zinc-500">
+              {new Date(e.ts).toLocaleString("en-US", { timeZone: "America/Los_Angeles" })}
+            </span>
+            <span className="font-medium">
+              {EVENT_LABELS[e.event_type] ?? e.event_type}
+              {typeof e.meta?.action === "string" && (
+                <span className="font-normal text-zinc-500"> · {String(e.meta.action).replaceAll("_", " ")}</span>
+              )}
+            </span>
+            {e.ip && <span className="ml-auto text-xs text-zinc-400">IP {e.ip}</span>}
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }

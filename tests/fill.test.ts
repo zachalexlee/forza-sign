@@ -78,7 +78,8 @@ describe("derived rules (Appendix C + packet-verified)", () => {
     const c = ctx("mo-cl");
     expect(resolveDerived("send_day", c)).toBe("1");
     expect(resolveDerived("send_month", c)).toBe("September");
-    expect(resolveDerived("send_year", c)).toBe("2026");
+    // Two digits: the agreement blanks are pre-printed "20____".
+    expect(resolveDerived("send_year", c)).toBe("26");
     expect(resolveDerived("send_date_us", c)).toBe("09/01/2026");
   });
 

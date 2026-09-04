@@ -15,24 +15,70 @@ const STATUS_LABELS: Record<string, string> = {
   reviewed: "Reviewed",
 };
 
+const PAGE_SIZE = 100;
+
 export default async function AdminHome({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{ status?: string; page?: string }>;
 }) {
-  const { status } = await searchParams;
+  const { status, page: pageParam } = await searchParams;
+  const page = Math.max(1, parseInt(pageParam ?? "1", 10) || 1);
   const supabase = await createClient();
 
+  // Pipeline stats — exact server-side counts (row reads are capped at 1000).
+  const count = async (table: "worksheets" | "applications", statuses: string[]) => {
+    const { count: n } = await supabase
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .in("status", statuses);
+    return n ?? 0;
+  };
+  const [awaiting, needsReview, drafts, outForSignature, completed] = await Promise.all([
+    count("worksheets", ["sent", "in_progress"]),
+    count("worksheets", ["submitted"]),
+    count("applications", ["draft"]),
+    count("applications", ["sent", "viewed"]),
+    count("applications", ["completed"]),
+  ]);
+  const stats = [
+    { label: "Awaiting customer", value: awaiting, href: "/admin?status=awaiting" },
+    { label: "Needs review", value: needsReview, href: "/admin?status=submitted" },
+    { label: "App drafts", value: drafts, href: "/admin/applications?status=draft" },
+    { label: "Out for signature", value: outForSignature, href: "/admin/applications?status=out" },
+    { label: "Completed", value: completed, href: "/admin/applications?status=completed" },
+  ];
+
+  // Paged with an exact count — the tiles promise exact totals, so the
+  // queue must be able to reach every counted row, not just the first 100.
   let query = supabase
     .from("worksheets")
-    .select("id, status, submitted_at, created_at, customers(business_name, contact_name, email)")
+    .select("id, status, submitted_at, created_at, customers(business_name, contact_name, email)", {
+      count: "exact",
+    })
     .order("created_at", { ascending: false })
-    .limit(100);
-  if (status && status in STATUS_LABELS) query = query.eq("status", status);
-  const { data: worksheets } = await query;
+    .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+  if (status === "awaiting") query = query.in("status", ["sent", "in_progress"]);
+  else if (status && status in STATUS_LABELS) query = query.eq("status", status);
+  const { data: worksheets, count: totalRows } = await query;
 
   return (
     <div>
+      <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {stats.map((s) => (
+          <Link
+            key={s.label}
+            href={s.href}
+            className="rounded-lg border border-zinc-200 bg-white p-4 transition-colors hover:border-forza-red"
+          >
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
+              {s.label}
+            </p>
+            <p className="mt-1 font-display text-3xl font-bold tabular-nums">{s.value}</p>
+          </Link>
+        ))}
+      </div>
+
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Worksheets</h1>
         <Link
@@ -108,6 +154,46 @@ export default async function AdminHome({
           </tbody>
         </table>
       </div>
+      <Pager
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={totalRows ?? 0}
+        makeHref={(p) => `/admin?${status ? `status=${status}&` : ""}page=${p}`}
+      />
+    </div>
+  );
+}
+
+function Pager({
+  page,
+  pageSize,
+  total,
+  makeHref,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  makeHref: (page: number) => string;
+}) {
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  if (lastPage === 1) return null;
+  return (
+    <div className="mt-4 flex items-center justify-between text-sm text-zinc-600">
+      <span>
+        Page {page} of {lastPage} · {total} total
+      </span>
+      <span className="flex gap-2">
+        {page > 1 && (
+          <Link href={makeHref(page - 1)} className="rounded-md border border-zinc-300 px-3 py-1 hover:bg-zinc-50">
+            ← Newer
+          </Link>
+        )}
+        {page < lastPage && (
+          <Link href={makeHref(page + 1)} className="rounded-md border border-zinc-300 px-3 py-1 hover:bg-zinc-50">
+            Older →
+          </Link>
+        )}
+      </span>
     </div>
   );
 }

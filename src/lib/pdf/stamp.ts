@@ -8,6 +8,15 @@ import { TemplateMap } from "./types";
  * flatten so nothing is editable, hash, and append the audit certificate.
  */
 
+/**
+ * Dates printed beside signatures use the office timezone — the UTC-hosted
+ * server would otherwise print tomorrow's date for a late-afternoon Pacific
+ * signing, disagreeing with the audit trail shown in admin.
+ */
+function stampDate(d: Date): string {
+  return d.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles" });
+}
+
 export interface StampInput {
   filledPdf: Uint8Array | ArrayBuffer;
   map: TemplateMap;
@@ -17,11 +26,25 @@ export interface StampInput {
   signedAt: Date;
 }
 
+/** A page rectangle captured before flattening (which erases the fields). */
+export interface PlacementRect {
+  pageIndex: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface StampResult {
   pdfBytes: Uint8Array;
   /** Placements that could not be stamped (no named field in the PDF) */
   skippedPlacements: number;
   stampedPlacements: number;
+  /**
+   * Forza-signer signature rectangles, captured while the form still exists
+   * so the office can countersign the flattened document later.
+   */
+  forzaPlacements: PlacementRect[];
 }
 
 /**
@@ -43,8 +66,37 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
   // appearance streams to the page content — anything drawn earlier can be
   // covered by an opaque field background.
   const targets: { pageIndex: number; rect: { x: number; y: number; width: number; height: number } }[] = [];
+  const forzaPlacements: PlacementRect[] = [];
   for (const placement of input.map.signaturePlacements) {
-    if (placement.signer !== "customer" || placement.kind !== "signature") continue;
+    if (placement.kind !== "signature") continue;
+    // Forza-signer lines are not stamped now — their rectangles are captured
+    // for the later countersign pass (flatten() erases the fields).
+    if (placement.signer === "forza") {
+      if (placement.pdf) {
+        try {
+          const widget = form.getField(placement.pdf).acroField.getWidgets()[0];
+          const rect = widget.getRectangle();
+          const ref = widget.P();
+          let pageIndex = doc.getPages().findIndex((p) => p.ref === ref);
+          if (pageIndex === -1 && placement.page) pageIndex = placement.page - 1;
+          if (pageIndex >= 0 && pageIndex < doc.getPageCount()) {
+            forzaPlacements.push({ pageIndex, ...rect });
+          }
+        } catch {
+          // No such field in this blank — nothing to countersign there.
+        }
+      } else if (placement.x !== undefined && placement.y !== undefined) {
+        forzaPlacements.push({
+          pageIndex: placement.page - 1,
+          x: placement.x,
+          y: placement.y,
+          width: placement.width ?? 180,
+          height: 24,
+        });
+      }
+      continue;
+    }
+    if (placement.signer !== "customer") continue;
     if (!placement.pdf) {
       // Signature lines with no AcroForm field use explicit coordinates.
       if (placement.x !== undefined && placement.y !== undefined) {
@@ -92,7 +144,7 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
     const scale = height / png.height;
     const width = Math.min(png.width * scale, rect.width || 160);
     page.drawImage(png, { x: rect.x, y: rect.y, width, height });
-    page.drawText(input.signedAt.toLocaleDateString("en-US"), {
+    page.drawText(stampDate(input.signedAt), {
       x: rect.x + width + 8,
       y: rect.y + 2,
       size: 8,
@@ -105,7 +157,41 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
     pdfBytes: await doc.save(),
     stampedPlacements: targets.length,
     skippedPlacements: skipped,
+    forzaPlacements,
   };
+}
+
+/**
+ * Countersign pass: draw the office signature + date over the Forza-signer
+ * rectangles captured at customer-stamp time. The document is already
+ * flattened, so this is plain page drawing.
+ */
+export async function stampCountersignature(
+  pdfBytes: Uint8Array | ArrayBuffer,
+  placements: PlacementRect[],
+  signaturePng: Uint8Array,
+  signedAt: Date
+): Promise<Uint8Array> {
+  const doc = await PDFDocument.load(pdfBytes);
+  const png = await doc.embedPng(signaturePng);
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+
+  for (const rect of placements) {
+    if (rect.pageIndex < 0 || rect.pageIndex >= doc.getPageCount()) continue;
+    const page = doc.getPage(rect.pageIndex);
+    const height = Math.max(rect.height, 18);
+    const scale = height / png.height;
+    const width = Math.min(png.width * scale, rect.width || 160);
+    page.drawImage(png, { x: rect.x, y: rect.y, width, height });
+    page.drawText(stampDate(signedAt), {
+      x: rect.x + width + 8,
+      y: rect.y + 2,
+      size: 8,
+      font: helv,
+      color: rgb(0.2, 0.2, 0.2),
+    });
+  }
+  return doc.save();
 }
 
 export function sha256Hex(bytes: Uint8Array): string {

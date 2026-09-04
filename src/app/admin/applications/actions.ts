@@ -10,6 +10,8 @@ import { logAuditEvent } from "@/lib/audit";
 import { sendEmail, signingRequestEmail } from "@/lib/email";
 import { WorksheetData } from "@/lib/fields/types";
 import { signingUrl } from "@/lib/signing";
+import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
+import { PlacementRect, appendCertificatePage, sha256Hex, stampCountersignature } from "@/lib/pdf/stamp";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SIGNING_TOKEN_TTL_DAYS, generateToken, tokenExpiry } from "@/lib/tokens";
@@ -357,4 +359,230 @@ export async function reviseAndResend(
   await regenerateFilledPdf(fresh.id);
   revalidatePath("/admin/applications");
   return { applicationId: fresh.id };
+}
+
+/**
+ * Forza countersignature: stamp the office signature over the Forza-signer
+ * lines of a completed application, rebuild the certificate page with the
+ * new content hash and the countersign event, re-seal, and replace the
+ * executed copy. Works from the stored pre-certificate working copy — a
+ * certificated or PKCS#7-sealed file cannot be edited in place.
+ */
+export async function countersignApplication(input: {
+  applicationId: string;
+  signaturePngDataUrl: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const staff = await requireStaff();
+  const supabase = createAdminClient();
+
+  const pngMatch = input.signaturePngDataUrl.match(/^data:image\/png;base64,(.+)$/);
+  if (!pngMatch) return { ok: false, error: "Signature must be a PNG" };
+  const signaturePng = new Uint8Array(Buffer.from(pngMatch[1], "base64"));
+
+  const { data: application } = await supabase
+    .from("applications")
+    .select(
+      "id, org_id, status, working_pdf_path, forza_placements, countersigned_at, programs(name), worksheets(customers(business_name)), signers(name, email, sign_order)"
+    )
+    .eq("id", input.applicationId)
+    .single();
+  if (!application || application.org_id !== staff.orgId) {
+    return { ok: false, error: "Application not found" };
+  }
+  if (application.status !== "completed") {
+    return { ok: false, error: "Only completed applications can be countersigned" };
+  }
+  const placements = (application.forza_placements ?? []) as PlacementRect[];
+  if (!application.working_pdf_path || placements.length === 0) {
+    return {
+      ok: false,
+      error:
+        "This application predates countersign support — no Forza signature positions were captured when it was signed.",
+    };
+  }
+
+  if (application.countersigned_at) {
+    return { ok: false, error: "Already countersigned" };
+  }
+
+  // Claim the countersignature slot atomically: two concurrent staff
+  // sessions must not both stamp and race to overwrite the executed copy.
+  // The claim is a separate, EXPIRING lock — the real countersigned_at is
+  // written only after the replacement document is stored, so a crash
+  // mid-attempt never leaves the application permanently "countersigned"
+  // with an unchanged PDF: the stale claim ages out and a retry proceeds.
+  const signedAt = new Date();
+  const claimTs = signedAt.toISOString();
+  const staleCutoff = new Date(signedAt.getTime() - 10 * 60 * 1000).toISOString();
+  const { data: claimed } = await supabase
+    .from("applications")
+    .update({ countersign_claimed_at: claimTs, countersigned_by: staff.userId })
+    .eq("id", application.id)
+    .is("countersigned_at", null)
+    .or(`countersign_claimed_at.is.null,countersign_claimed_at.lt.${staleCutoff}`)
+    .select("id");
+  if (!claimed || claimed.length === 0) {
+    return {
+      ok: false,
+      error: "Already countersigned, or a countersign attempt is in progress",
+    };
+  }
+  const releaseClaim = () =>
+    supabase
+      .from("applications")
+      .update({ countersign_claimed_at: null, countersigned_by: null })
+      .eq("id", application.id)
+      .eq("countersign_claimed_at", claimTs);
+
+  try {
+    const { data: working } = await supabase.storage
+      .from("final")
+      .download(application.working_pdf_path);
+    if (!working) {
+      await releaseClaim();
+      return { ok: false, error: "Stored document not found" };
+    }
+
+    const countersigned = await stampCountersignature(
+      await working.arrayBuffer(),
+      placements,
+      signaturePng,
+      signedAt
+    );
+    const sha256 = sha256Hex(new Uint8Array(countersigned));
+
+    // Certificate rebuilt from scratch: new hash + full history including
+    // the countersign event (inserted into the audit table after the
+    // uploads succeed, with this same timestamp). Newest 500 — capping an
+    // ascending fetch would drop the completion tail, not old noise. A
+    // failed read must abort: silently rebuilding from an empty list would
+    // strip the certified history from the stored legal copy.
+    const { data: eventsDesc, error: eventsError } = await supabase
+      .from("audit_events")
+      .select("event_type, ts, ip, meta")
+      .eq("application_id", application.id)
+      .order("ts", { ascending: false })
+      .limit(500);
+    if (eventsError) {
+      await releaseClaim();
+      return {
+        ok: false,
+        error: "Could not load the audit history — nothing was changed; try again.",
+      };
+    }
+    const events = (eventsDesc ?? []).reverse();
+    const countersignEvent = {
+      event_type: "signed",
+      ts: signedAt.toISOString(),
+      ip: null,
+      detail: `countersigned by ${staff.fullName}`,
+    };
+    const programName = (application.programs as unknown as { name: string } | null)?.name;
+    const businessName =
+      (application.worksheets as unknown as { customers: { business_name: string } | null } | null)
+        ?.customers?.business_name ?? "the business";
+    const signerRows = (application.signers ?? []) as { name: string; email: string; sign_order: number }[];
+    const primarySigner = [...signerRows].sort((a, b) => a.sign_order - b.sign_order)[0];
+
+    const certified = await appendCertificatePage(new Uint8Array(countersigned), {
+      documentTitle: `${programName ?? "ATM Application"} — ${businessName}`,
+      applicationId: application.id,
+      sha256,
+      signer: primarySigner ?? { name: "—", email: "—" },
+      events: [
+        ...events.map((e) => ({
+          event_type: e.event_type as string,
+          ts: e.ts as string,
+          ip: e.ip as string | null,
+          detail: (e.meta as { action?: string })?.action,
+        })),
+        countersignEvent,
+      ],
+    });
+
+    let sealed: Uint8Array = certified;
+    try {
+      sealed = await digitallySignIfConfigured(
+        certified,
+        `Countersigned by ${staff.fullName} for Forza Payments`
+      );
+    } catch (err) {
+      console.error("PKCS#7 sealing failed on countersign — storing unsealed", err);
+    }
+
+    // Attempt-specific object: an attempt whose lease expired must not be
+    // able to overwrite the live executed copy after another session has
+    // finalized — the path only becomes live through the conditional
+    // finalize below, so an expired attempt just leaves an orphan.
+    const finalPath = `applications/${application.id}/executed-${signedAt.getTime()}.pdf`;
+    const { error: uploadError } = await supabase.storage
+      .from("final")
+      .upload(finalPath, Buffer.from(sealed), {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+    if (uploadError) {
+      await releaseClaim();
+      return { ok: false, error: `Store failed: ${uploadError.message}` };
+    }
+
+    // Finalize atomically in one database transaction (countersign_finalize,
+    // migration 00008): the claim-conditional metadata update and the audit
+    // event insert commit together or not at all — an attempt that lost its
+    // lease can neither finalize nor leave a stray countersign event in the
+    // immutable trail. Checked and retried once (Supabase returns errors
+    // rather than throwing); false means the lease expired mid-attempt and
+    // another session took over, with nothing recorded by this one.
+    const finalize = () =>
+      supabase.rpc("countersign_finalize", {
+        p_application_id: application.id,
+        p_claim_ts: claimTs,
+        p_final_path: finalPath,
+        p_sha256: sha256,
+        p_org_id: application.org_id,
+        p_meta: {
+          action: "countersigned",
+          by: staff.fullName,
+          sha256_countersigned: sha256,
+        },
+      });
+    let { data: finalized, error: metaError } = await finalize();
+    if (metaError) {
+      ({ data: finalized, error: metaError } = await finalize());
+    }
+    if (metaError) {
+      console.error("Countersign finalization failed", metaError);
+      await releaseClaim();
+      return {
+        ok: false,
+        error:
+          "Recording the countersignature failed — nothing was finalized; try again.",
+      };
+    }
+    if (!finalized) {
+      return {
+        ok: false,
+        error: "This countersign attempt expired and another session took over.",
+      };
+    }
+
+    // Advance the working copy so any future rebuild starts from the
+    // countersigned content. Only after finalizing — a failed attempt must
+    // leave the pre-countersign copy in place for a clean re-stamp.
+    const { error: advanceError } = await supabase.storage
+      .from("final")
+      .upload(application.working_pdf_path, Buffer.from(countersigned), {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+    if (advanceError) {
+      console.error("Working-copy advance failed after countersign", advanceError);
+    }
+
+    revalidatePath(`/admin/applications/${application.id}`);
+    return { ok: true };
+  } catch (err) {
+    await releaseClaim();
+    throw err;
+  }
 }

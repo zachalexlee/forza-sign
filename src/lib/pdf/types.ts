@@ -29,6 +29,8 @@ export interface MapEntry {
    * resolved value's digits.
    */
   digitIndex?: number;
+  /** Center the value in its text field (short pre-printed blanks). */
+  align?: "center";
   /**
    * Coordinate fallback for blanks with no AcroForm field (e.g. the cover
    * sheet's wireless question): draw the resolved value as text at this

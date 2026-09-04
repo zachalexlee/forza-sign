@@ -62,7 +62,8 @@ export function resolveDerived(rule: string, ctx: FillContext): string | boolean
     case "send_month":
       return sendDate.toLocaleString("en-US", { month: "long" });
     case "send_year":
-      return String(sendDate.getFullYear());
+      // The agreement blanks are pre-printed "20____" — fill two digits only.
+      return String(sendDate.getFullYear() % 100).padStart(2, "0");
     case "send_date_us":
       return `${String(sendDate.getMonth() + 1).padStart(2, "0")}/${String(
         sendDate.getDate()

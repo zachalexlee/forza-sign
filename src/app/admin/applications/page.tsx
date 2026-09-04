@@ -11,15 +11,35 @@ const STATUS_BADGES: Record<string, string> = {
   declined: "bg-red-100 text-red-700",
 };
 
-export default async function ApplicationsPage() {
+/** Dashboard-tile filters: pseudo-status "out" = sent or viewed. */
+const STATUS_FILTERS: Record<string, string[]> = {
+  draft: ["draft"],
+  out: ["sent", "viewed"],
+  completed: ["completed"],
+};
+
+const PAGE_SIZE = 100;
+
+export default async function ApplicationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string; page?: string }>;
+}) {
+  const { status, page: pageParam } = await searchParams;
+  const page = Math.max(1, parseInt(pageParam ?? "1", 10) || 1);
   const supabase = await createClient();
-  const { data: applications } = await supabase
+  // Paged with an exact count — the dashboard tiles promise exact totals,
+  // so every counted row must be reachable, not just the first 100.
+  let query = supabase
     .from("applications")
     .select(
-      "id, status, created_at, filled_pdf_path, programs(name), worksheets(customers(business_name))"
+      "id, status, created_at, filled_pdf_path, programs(name), worksheets(customers(business_name))",
+      { count: "exact" }
     )
     .order("created_at", { ascending: false })
-    .limit(100);
+    .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+  if (status && status in STATUS_FILTERS) query = query.in("status", STATUS_FILTERS[status]);
+  const { data: applications, count: totalRows } = await query;
 
   return (
     <div>
@@ -83,6 +103,46 @@ export default async function ApplicationsPage() {
           </tbody>
         </table>
       </div>
+      <Pager
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={totalRows ?? 0}
+        makeHref={(p) => `/admin/applications?${status ? `status=${status}&` : ""}page=${p}`}
+      />
+    </div>
+  );
+}
+
+function Pager({
+  page,
+  pageSize,
+  total,
+  makeHref,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  makeHref: (page: number) => string;
+}) {
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  if (lastPage === 1) return null;
+  return (
+    <div className="mt-4 flex items-center justify-between text-sm text-zinc-600">
+      <span>
+        Page {page} of {lastPage} · {total} total
+      </span>
+      <span className="flex gap-2">
+        {page > 1 && (
+          <Link href={makeHref(page - 1)} className="rounded-md border border-zinc-300 px-3 py-1 hover:bg-zinc-50">
+            ← Newer
+          </Link>
+        )}
+        {page < lastPage && (
+          <Link href={makeHref(page + 1)} className="rounded-md border border-zinc-300 px-3 py-1 hover:bg-zinc-50">
+            Older →
+          </Link>
+        )}
+      </span>
     </div>
   );
 }

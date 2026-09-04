@@ -30,7 +30,7 @@ import { MapEntry, TemplateMap } from "../types";
  * legacy NULL) and is older than this. Office-edited maps ('custom') are
  * never auto-updated.
  */
-export const MAP_VERSION = 3;
+export const MAP_VERSION = 4;
 
 // ---------------------------------------------------------------------------
 // Shared fields — identical names in both packets (cover sheet, application,
@@ -102,9 +102,9 @@ const shared: MapEntry[] = [
   { pdf: "Forza Rep", source: "sales.rep_name" },
 
   // Processing agreement (CL p3 / ML p4)
-  { pdf: "Day", derived: "send_day", note: "shared with cash-loading agreement date (CL)" },
+  { pdf: "Day", derived: "send_day", align: "center", note: "shared with cash-loading agreement date (CL)" },
   { pdf: "Month", derived: "send_month" },
-  { pdf: "Year", derived: "send_year" },
+  { pdf: "Year", derived: "send_year", align: "center", note: "blank is pre-printed 20__" },
 
   // ACH Authorization (CL p4 / ML p5)
   { pdf: "Check Box33", const: "Yes", checkbox: { equals: "Yes" }, note: "Vault Cash (always)" },
