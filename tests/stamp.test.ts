@@ -1,6 +1,8 @@
-import { PDFDocument } from "pdf-lib";
+import { readFileSync } from "fs";
+import { PDFArray, PDFDocument, PDFName, PDFRef } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { appendCertificatePage, sha256Hex, stampAndFlatten } from "@/lib/pdf/stamp";
+import { merchantLoadMap } from "@/lib/pdf/maps";
 import { TemplateMap } from "@/lib/pdf/types";
 
 /** Minimal 1x1 transparent PNG. */
@@ -60,6 +62,33 @@ describe("stampAndFlatten", () => {
     expect(doc.getPageCount()).toBe(2);
   });
 
+  it("leaves no dangling annotation refs when flattening the real packet", async () => {
+    // Regression: this packet shares one field's widgets across many pages;
+    // pdf-lib's flatten() deleted the widget objects but left them in page
+    // /Annots arrays — Adobe Acrobat then failed with "error processing a
+    // page" and rendered blank pages, while browsers silently repaired it.
+    const blank = readFileSync("templates/blanks/mo-ml-v1.pdf");
+    const result = await stampAndFlatten({
+      filledPdf: new Uint8Array(blank),
+      map: merchantLoadMap,
+      signaturePng: new Uint8Array(TINY_PNG),
+      signerName: "Jordan Smith",
+      signedAt: new Date("2026-09-01T12:00:00Z"),
+    });
+    const doc = await PDFDocument.load(result.pdfBytes, { throwOnInvalidObject: true });
+    expect(doc.getForm().getFields()).toHaveLength(0);
+    for (const page of doc.getPages()) {
+      const annots = page.node.lookup(PDFName.of("Annots"));
+      if (!(annots instanceof PDFArray)) continue;
+      for (let i = 0; i < annots.size(); i++) {
+        const ref = annots.get(i);
+        if (ref instanceof PDFRef) {
+          expect(doc.context.lookup(ref)).toBeDefined();
+        }
+      }
+    }
+  });
+
   it("countersigns the flattened document at the captured rectangles", async () => {
     const { stampCountersignature } = await import("@/lib/pdf/stamp");
     const stamped = await stampAndFlatten({
@@ -75,7 +104,9 @@ describe("stampAndFlatten", () => {
       new Uint8Array(TINY_PNG),
       new Date("2026-09-02T12:00:00Z")
     );
-    expect(countersigned.length).toBeGreaterThan(stamped.pdfBytes.length);
+    // Content must change (image + date drawn); byte size is not a reliable
+    // proxy since save modes differ between the two passes.
+    expect(Buffer.from(countersigned).equals(Buffer.from(stamped.pdfBytes))).toBe(false);
     const doc = await PDFDocument.load(countersigned);
     expect(doc.getPageCount()).toBe(2);
     expect(doc.getForm().getFields()).toHaveLength(0); // still flat
