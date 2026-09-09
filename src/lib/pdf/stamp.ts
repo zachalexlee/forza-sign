@@ -253,7 +253,7 @@ export async function stampCountersignature(
       color: rgb(0.2, 0.2, 0.2),
     });
   }
-  return doc.save();
+  return doc.save({ useObjectStreams: false });
 }
 
 export function sha256Hex(bytes: Uint8Array): string {
@@ -345,5 +345,5 @@ export async function appendCertificatePage(
     { size: 7 }
   );
 
-  return doc.save();
+  return doc.save({ useObjectStreams: false });
 }
