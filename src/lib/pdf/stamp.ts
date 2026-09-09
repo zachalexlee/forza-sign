@@ -1,5 +1,16 @@
 import { createHash } from "crypto";
-import { PDFDocument, PDFPage, StandardFonts, rgb } from "pdf-lib";
+import {
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFForm,
+  PDFName,
+  PDFPage,
+  PDFRef,
+  PDFStream,
+  StandardFonts,
+  rgb,
+} from "pdf-lib";
 import { TemplateMap } from "./types";
 
 /**
@@ -7,6 +18,52 @@ import { TemplateMap } from "./types";
  * stamp signature images over the customer signature fields, stamp dates,
  * flatten so nothing is editable, hash, and append the audit certificate.
  */
+
+/**
+ * pdf-lib's flatten() corrupts these packets in two ways that strict viewers
+ * (Adobe Acrobat) reject even though browsers silently repair them: widget
+ * appearance streams copied into page resources without a /Subtype /Form
+ * marker, and — because one field here shares widgets across many pages —
+ * deleted widget objects left dangling in page /Annots arrays ("error
+ * processing a page", blank pages). Patch the streams before flattening and
+ * sweep the dangling refs after.
+ */
+function patchAppearanceSubtypes(form: PDFForm): void {
+  for (const field of form.getFields()) {
+    for (const widget of field.acroField.getWidgets()) {
+      const ap = widget.dict.lookup(PDFName.of("AP"));
+      if (!(ap instanceof PDFDict)) continue;
+      for (const key of ap.keys()) {
+        const entry = ap.lookup(key);
+        const streams: unknown[] =
+          entry instanceof PDFDict ? entry.keys().map((k) => entry.lookup(k)) : [entry];
+        for (const s of streams) {
+          if (s instanceof PDFStream && !s.dict.has(PDFName.of("Subtype"))) {
+            s.dict.set(PDFName.of("Subtype"), PDFName.of("Form"));
+          }
+        }
+      }
+    }
+  }
+}
+
+function sweepDanglingAnnots(doc: PDFDocument): void {
+  for (const page of doc.getPages()) {
+    const annots = page.node.lookup(PDFName.of("Annots"));
+    if (!(annots instanceof PDFArray)) continue;
+    const keep = [];
+    for (let i = 0; i < annots.size(); i++) {
+      const ref = annots.get(i);
+      if (ref instanceof PDFRef && doc.context.lookup(ref) === undefined) continue;
+      keep.push(ref);
+    }
+    if (keep.length !== annots.size()) {
+      const arr = doc.context.obj([]) as PDFArray;
+      for (const k of keep) arr.push(k);
+      page.node.set(PDFName.of("Annots"), arr);
+    }
+  }
+}
 
 /**
  * Dates printed beside signatures use the office timezone — the UTC-hosted
@@ -135,7 +192,9 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
   }
 
   // Pass 2: flatten — form fields become static page content (§7.4).
+  patchAppearanceSubtypes(form);
   form.flatten();
+  sweepDanglingAnnots(doc);
 
   // Pass 3: draw signatures + dates on top of the flattened content.
   for (const { pageIndex, rect } of targets) {
@@ -154,7 +213,10 @@ export async function stampAndFlatten(input: StampInput): Promise<StampResult> {
   }
 
   return {
-    pdfBytes: await doc.save(),
+    // Classic xref table — pdf-lib's xref-stream writer mishandles the
+    // object-number gaps flatten leaves, and the PKCS#7 signer requires
+    // non-stream xrefs downstream anyway.
+    pdfBytes: await doc.save({ useObjectStreams: false }),
     stampedPlacements: targets.length,
     skippedPlacements: skipped,
     forzaPlacements,
