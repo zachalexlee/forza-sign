@@ -7,7 +7,8 @@ import {
   resolveTemplateMap,
 } from "@/lib/pdf/resolve-map";
 import { logAuditEvent } from "@/lib/audit";
-import { sendEmail, signingRequestEmail } from "@/lib/email";
+import { countersignedEmail, sendEmail, signingRequestEmail } from "@/lib/email";
+import { executedPdfFilename } from "@/lib/filenames";
 import { WorksheetData } from "@/lib/fields/types";
 import { signingUrl } from "@/lib/signing";
 import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
@@ -577,6 +578,44 @@ export async function countersignApplication(input: {
       });
     if (advanceError) {
       console.error("Working-copy advance failed after countersign", advanceError);
+    }
+
+    // Fully executed copies by email (customer + office). The countersign is
+    // already finalized, so a send failure never fails the action — sendEmail
+    // logs every attempt to email_log either way.
+    const attachment = {
+      filename: executedPdfFilename(businessName),
+      content: Buffer.from(sealed),
+    };
+    const documentName = programName ?? "ATM Application";
+    if (primarySigner?.email) {
+      await sendEmail({
+        to: primarySigner.email,
+        ...countersignedEmail({
+          recipientName: primarySigner.name,
+          businessName,
+          documentName,
+        }),
+        template: "countersigned_signer",
+        org_id: application.org_id,
+        application_id: application.id,
+        attachments: [attachment],
+      });
+    }
+    const officeAddress = process.env.OFFICE_NOTIFY_EMAIL;
+    if (officeAddress) {
+      await sendEmail({
+        to: officeAddress,
+        ...countersignedEmail({
+          recipientName: "Forza team",
+          businessName,
+          documentName,
+        }),
+        template: "countersigned_office",
+        org_id: application.org_id,
+        application_id: application.id,
+        attachments: [attachment],
+      });
     }
 
     revalidatePath(`/admin/applications/${application.id}`);

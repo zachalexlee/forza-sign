@@ -160,6 +160,23 @@ export function completedEmail(opts: {
   };
 }
 
+export function countersignedEmail(opts: {
+  recipientName: string;
+  businessName: string;
+  documentName: string;
+}): { subject: string; html: string } {
+  return {
+    subject: `Fully executed — ${opts.documentName} (${opts.businessName})`,
+    html: wrapper(`
+      <p>Hello ${escapeHtml(opts.recipientName)},</p>
+      <p>Forza Payments has countersigned the <strong>${escapeHtml(opts.documentName)}</strong> for
+      <strong>${escapeHtml(opts.businessName)}</strong>. The fully executed copy — signed by both
+      parties, with its updated signature certificate — is attached for your records. This version
+      replaces the copy sent when you signed.</p>
+    `),
+  };
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
