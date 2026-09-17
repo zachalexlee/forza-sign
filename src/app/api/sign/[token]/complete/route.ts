@@ -6,6 +6,7 @@ import {
   hasStampableCustomerSignature,
   resolveTemplateMap,
 } from "@/lib/pdf/resolve-map";
+import { executedPdfFilename } from "@/lib/filenames";
 import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
 import { appendCertificatePage, sha256Hex, stampAndFlatten } from "@/lib/pdf/stamp";
 import { validateSigningToken } from "@/lib/signing";
@@ -204,7 +205,7 @@ export async function POST(
 
   // 6. Executed copies by email (signer + office).
   const attachment = {
-    filename: "executed-application.pdf",
+    filename: executedPdfFilename(businessName),
     content: Buffer.from(finalBytes),
   };
   const signerEmail = completedEmail({

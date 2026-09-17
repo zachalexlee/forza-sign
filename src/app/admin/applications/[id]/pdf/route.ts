@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { contentDisposition, executedPdfFilename } from "@/lib/filenames";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -23,7 +24,7 @@ export async function GET(
 
   const { data: application } = await supabase
     .from("applications")
-    .select("id, filled_pdf_path, final_pdf_path")
+    .select("id, filled_pdf_path, final_pdf_path, worksheets(customers(business_name))")
     .eq("id", id)
     .maybeSingle();
   if (!application) return new NextResponse("Not found", { status: 404 });
@@ -39,11 +40,18 @@ export async function GET(
 
   const attachment =
     new URL(request.url).searchParams.get("download") === "1";
-  const filename = `${executed ? "executed" : "application"}-${id.slice(0, 8)}.pdf`;
+  const businessName = (
+    application.worksheets as unknown as {
+      customers: { business_name: string } | null;
+    } | null
+  )?.customers?.business_name;
+  const filename = executed
+    ? executedPdfFilename(businessName)
+    : `application-${id.slice(0, 8)}.pdf`;
   return new NextResponse(Buffer.from(await file.arrayBuffer()), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `${attachment ? "attachment" : "inline"}; filename="${filename}"`,
+      "Content-Disposition": contentDisposition(attachment ? "attachment" : "inline", filename),
       "Cache-Control": "private, no-store",
     },
   });
