@@ -1,5 +1,6 @@
 import { SigningFlow } from "@/components/signing/SigningFlow";
 import { logAuditEvent } from "@/lib/audit";
+import { executedPdfFilename } from "@/lib/filenames";
 import { ESIGN_DISCLOSURE, validateSigningToken } from "@/lib/signing";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -42,9 +43,16 @@ export default async function SigningPage({
     let downloadUrl: string | null = null;
     if (result.application.final_pdf_path) {
       const supabase = createAdminClient();
+      const businessName = (
+        result.application.worksheets as unknown as {
+          customers: { business_name: string } | null;
+        } | null
+      )?.customers?.business_name;
       const { data } = await supabase.storage
         .from("final")
-        .createSignedUrl(result.application.final_pdf_path, 3600);
+        .createSignedUrl(result.application.final_pdf_path, 3600, {
+          download: executedPdfFilename(businessName),
+        });
       downloadUrl = data?.signedUrl ?? null;
     }
     return (

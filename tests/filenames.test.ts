@@ -26,4 +26,10 @@ describe("contentDisposition", () => {
     expect(header).toContain('attachment; filename="Caf_ N__ez (Forza Payments ATM App).pdf"');
     expect(header).toContain("filename*=UTF-8''Caf%C3%A9%20N%C3%BA%C3%B1ez");
   });
+
+  it("percent-encodes the RFC 5987 reserved characters ' ( ) *", () => {
+    const header = contentDisposition("attachment", "Danny's Mart (A*B).pdf");
+    const ext = header.split("filename*=UTF-8''")[1];
+    expect(ext).toBe("Danny%27s%20Mart%20%28A%2AB%29.pdf");
+  });
 });

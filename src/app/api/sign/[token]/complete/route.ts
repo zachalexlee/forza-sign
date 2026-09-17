@@ -238,10 +238,12 @@ export async function POST(
     });
   }
 
-  // 7. Download link for the completion screen (short-lived).
+  // 7. Download link for the completion screen (short-lived). The download
+  // option makes the file save under the branded name instead of the
+  // storage object's "executed.pdf".
   const { data: signedUrl } = await supabase.storage
     .from("final")
-    .createSignedUrl(finalPath, 600);
+    .createSignedUrl(finalPath, 600, { download: executedPdfFilename(businessName) });
 
   return NextResponse.json({
     completed: true,
