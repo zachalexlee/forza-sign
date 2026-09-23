@@ -11,13 +11,24 @@ export function isAllowedStaffEmail(email: string | null | undefined): boolean {
   return email.slice(at + 1).toLowerCase() === STAFF_EMAIL_DOMAIN;
 }
 
+const NEXT_FALLBACK = "/admin";
+const PROBE_ORIGIN = "https://same-site.invalid";
+
 /**
  * Post-login redirect target. Only same-site paths are honored — an
  * absolute or protocol-relative `next` would make login an open redirect.
+ * The candidate is resolved exactly as the browser/URL parser will resolve
+ * it (which strips tabs/newlines and treats `\` as `/`) and must keep our
+ * origin; the normalized path is returned, never the raw input.
  */
 export function safeNextPath(next: string | null | undefined): string {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.includes("\\")) {
-    return "/admin";
+  if (!next || !next.startsWith("/")) return NEXT_FALLBACK;
+  let resolved: URL;
+  try {
+    resolved = new URL(next, PROBE_ORIGIN);
+  } catch {
+    return NEXT_FALLBACK;
   }
-  return next;
+  if (resolved.origin !== PROBE_ORIGIN) return NEXT_FALLBACK;
+  return resolved.pathname + resolved.search + resolved.hash;
 }

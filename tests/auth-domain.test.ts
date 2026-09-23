@@ -29,4 +29,17 @@ describe("safeNextPath", () => {
     expect(safeNextPath("/\\evil.example")).toBe("/admin");
     expect(safeNextPath(null)).toBe("/admin");
   });
+
+  it("rejects control characters the URL parser would strip", () => {
+    // URLSearchParams decodes /%09/evil.example to "/\t/evil.example",
+    // which new URL() resolves to https://evil.example/.
+    for (const raw of ["/%09/evil.example", "/%0a/evil.example", "/%0d/evil.example"]) {
+      const next = new URLSearchParams(`next=${raw}`).get("next");
+      expect(safeNextPath(next)).toBe("/admin");
+    }
+  });
+
+  it("keeps query strings on same-site paths", () => {
+    expect(safeNextPath("/admin?status=draft")).toBe("/admin?status=draft");
+  });
 });
