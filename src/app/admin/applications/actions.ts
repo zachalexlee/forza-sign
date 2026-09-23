@@ -13,6 +13,7 @@ import { WorksheetData } from "@/lib/fields/types";
 import { signingUrl } from "@/lib/signing";
 import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
 import { PlacementRect, appendCertificatePage, sha256Hex, stampCountersignature } from "@/lib/pdf/stamp";
+import { sendSigningReminder } from "@/lib/reminders";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SIGNING_TOKEN_TTL_DAYS, generateToken, tokenExpiry } from "@/lib/tokens";
@@ -313,6 +314,41 @@ export async function voidApplication(applicationId: string): Promise<void> {
 
   revalidatePath(`/admin/applications/${applicationId}`);
   revalidatePath("/admin/applications");
+}
+
+/**
+ * Staff "Send reminder now": emails every pending signer a fresh link. Also
+ * revives a link that expired, since staff are choosing to chase it.
+ */
+export async function remindSigners(applicationId: string): Promise<{ sent: number }> {
+  const staff = await requireStaff();
+  const supabase = createAdminClient();
+
+  const { data: application } = await supabase
+    .from("applications")
+    .select("id, status, signers(id, status)")
+    .eq("id", applicationId)
+    .eq("org_id", staff.orgId)
+    .single();
+  if (!application) throw new Error("Application not found");
+  if (!["sent", "viewed"].includes(application.status)) {
+    throw new Error("Only applications awaiting signature can be reminded");
+  }
+
+  const pending = (application.signers ?? []).filter((s) =>
+    ["sent", "viewed", "consented"].includes(s.status)
+  );
+  let sent = 0;
+  for (const signer of pending) {
+    const result = await sendSigningReminder(signer.id, { kind: "manual", by: staff.fullName });
+    if (result.ok) sent += 1;
+  }
+  if (pending.length > 0 && sent === 0) {
+    throw new Error("The reminder email couldn't be sent — check the email log and try again");
+  }
+
+  revalidatePath(`/admin/applications/${applicationId}`);
+  return { sent };
 }
 
 /** Revise & resend: void the old application, clone a fresh draft from it. */

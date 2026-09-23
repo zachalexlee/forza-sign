@@ -85,11 +85,17 @@ export function worksheetInviteEmail(opts: {
   businessName: string;
   link: string;
   expiresDays: number;
+  reminder?: boolean;
 }): { subject: string; html: string } {
   return {
-    subject: "Forza Payments — ATM application worksheet",
+    subject: `${opts.reminder ? "Reminder: " : ""}Forza Payments — ATM application worksheet`,
     html: wrapper(`
       <p>Hello,</p>
+      ${
+        opts.reminder
+          ? "<p>Just a friendly reminder — your worksheet isn't finished yet. Anything you've already entered is saved, so you can pick up where you left off.</p>"
+          : ""
+      }
       <p>To get started with your ATM application for <strong>${escapeHtml(opts.businessName)}</strong>,
       please fill out our online worksheet. It takes about 10 minutes, checks your entries as you type,
       and saves your progress automatically so you can return anytime.</p>
