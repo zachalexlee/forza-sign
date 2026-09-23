@@ -98,15 +98,22 @@ export async function sendSigningReminder(
     return { ok: false, reason: "not_pending" };
   }
 
+  // Compare-and-swap on the current token: if another reminder (cron vs.
+  // staff button) rotated it since we read it, back off rather than
+  // invalidate the link that one just emailed.
   const { token, hash } = generateToken();
-  const { error: rotateError } = await supabase
+  const { data: rotated, error: rotateError } = await supabase
     .from("signers")
     .update({
       token_hash: hash,
       token_expires_at: tokenExpiry(SIGNING_TOKEN_TTL_DAYS).toISOString(),
     })
-    .eq("id", signer.id);
-  if (rotateError) return { ok: false, reason: "send_failed" };
+    .eq("id", signer.id)
+    .eq("token_hash", signer.token_hash)
+    .select("id");
+  if (rotateError || !rotated || rotated.length === 0) {
+    return { ok: false, reason: "send_failed" };
+  }
 
   const delivery = await sendEmail({
     to: signer.email,
@@ -124,10 +131,12 @@ export async function sendSigningReminder(
   });
 
   if (!delivery.ok) {
+    // Roll back only if the token is still ours.
     await supabase
       .from("signers")
       .update({ token_hash: signer.token_hash, token_expires_at: signer.token_expires_at })
-      .eq("id", signer.id);
+      .eq("id", signer.id)
+      .eq("token_hash", hash);
     return { ok: false, reason: "send_failed" };
   }
 
@@ -162,11 +171,12 @@ export async function sendWorksheetReminder(
   } | null;
   if (!customer?.email) return { ok: false, reason: "no_email" };
 
-  const { data: activeLinks } = await supabase
+  const { data: activeLinks, error: activeError } = await supabase
     .from("worksheet_links")
     .select("id")
     .eq("worksheet_id", worksheetId)
     .is("revoked_at", null);
+  if (activeError) return { ok: false, reason: "send_failed" };
   const activeIds = (activeLinks ?? []).map((l) => l.id);
 
   const { token, hash } = generateToken();
@@ -182,10 +192,23 @@ export async function sendWorksheetReminder(
   if (linkError || !newLink) return { ok: false, reason: "send_failed" };
 
   if (activeIds.length > 0) {
-    await supabase
+    // Only revoke links that are still active; if another reminder already
+    // rotated them (or the update fails), undo ours instead of leaving two
+    // valid customer links.
+    const { data: revoked, error: revokeError } = await supabase
       .from("worksheet_links")
       .update({ revoked_at: new Date().toISOString() })
-      .in("id", activeIds);
+      .in("id", activeIds)
+      .is("revoked_at", null)
+      .select("id");
+    if (revokeError || !revoked || revoked.length !== activeIds.length) {
+      await supabase.from("worksheet_links").delete().eq("id", newLink.id);
+      const ours = (revoked ?? []).map((l) => l.id);
+      if (ours.length > 0) {
+        await supabase.from("worksheet_links").update({ revoked_at: null }).in("id", ours);
+      }
+      return { ok: false, reason: "send_failed" };
+    }
   }
 
   const delivery = await sendEmail({
@@ -243,12 +266,14 @@ export async function runAutomaticReminders(now: Date = new Date()): Promise<{
     // An expired link means the office let it lapse — don't revive it.
     if (signer.token_expires_at && new Date(signer.token_expires_at) <= now) continue;
 
-    const { data: reminders } = await supabase
+    const { data: reminders, error: remindersError } = await supabase
       .from("audit_events")
       .select("ts, meta")
       .eq("signer_id", signer.id)
       .eq("event_type", "reminder_sent")
       .order("ts", { ascending: false });
+    // An unreadable history must not look like "no reminders yet".
+    if (remindersError) continue;
     const autoSent = (reminders ?? []).filter(
       (r) => (r.meta as { action?: string } | null)?.action !== "manual_reminder"
     ).length;
@@ -273,7 +298,7 @@ export async function runAutomaticReminders(now: Date = new Date()): Promise<{
     .in("status", ["sent", "in_progress"]);
 
   for (const worksheet of worksheets ?? []) {
-    const { data: lastEmail } = await supabase
+    const { data: lastEmail, error: lastEmailError } = await supabase
       .from("email_log")
       .select("sent_at")
       .eq("worksheet_id", worksheet.id)
@@ -283,13 +308,14 @@ export async function runAutomaticReminders(now: Date = new Date()): Promise<{
       .limit(1)
       .maybeSingle();
     // Never emailed (office filling it in, or link handed over manually).
-    if (!lastEmail) continue;
+    if (lastEmailError || !lastEmail) continue;
 
-    const { data: reminders } = await supabase
+    const { data: reminders, error: remindersError } = await supabase
       .from("audit_events")
       .select("meta")
       .eq("worksheet_id", worksheet.id)
       .eq("event_type", "reminder_sent");
+    if (remindersError) continue;
     const autoSent = (reminders ?? []).filter(
       (r) => (r.meta as { action?: string } | null)?.action !== "manual_reminder"
     ).length;
