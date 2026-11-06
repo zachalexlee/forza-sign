@@ -23,10 +23,17 @@ update programs set name = 'PAI – Placement / Cash Loading', sort_order = 1 wh
 update programs set name = 'PAI – Merchant-Owned / Third-Party Cash Loading', sort_order = 2 where code = 'mo-cl';
 update programs set name = 'PAI – Merchant-Owned / Merchant-Loaded', sort_order = 3 where code = 'mo-ml';
 
-insert into programs (org_id, code, name, processor, cash_loading, sort_order) values
-  ('00000000-0000-0000-0000-000000000001', 'dns-pl-cl', 'DNS – Placement / Cash Loading', 'DNS', true, 11),
-  ('00000000-0000-0000-0000-000000000001', 'dns-mo-cl', 'DNS – Merchant-Owned / Third-Party Cash Loading', 'DNS', true, 12),
-  ('00000000-0000-0000-0000-000000000001', 'dns-mo-ml', 'DNS – Merchant-Owned / Merchant-Loaded', 'DNS', false, 13)
+-- Only where the Forza org already exists (production); a fresh database
+-- gets these programs from seed.sql, which runs after the migrations.
+insert into programs (org_id, code, name, processor, cash_loading, sort_order)
+select o.id, v.code, v.name, 'DNS', v.cash_loading, v.sort_order
+from organizations o
+cross join (values
+  ('dns-pl-cl', 'DNS – Placement / Cash Loading', true, 11),
+  ('dns-mo-cl', 'DNS – Merchant-Owned / Third-Party Cash Loading', true, 12),
+  ('dns-mo-ml', 'DNS – Merchant-Owned / Merchant-Loaded', false, 13)
+) as v(code, name, cash_loading, sort_order)
+where o.id = '00000000-0000-0000-0000-000000000001'
 on conflict (code) do nothing;
 
 -- One program, several blanks: 'standard' (flat rebate) or 'tiered'.
