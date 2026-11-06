@@ -23,14 +23,17 @@ async function main() {
 
   const { data: templates, error } = await supabase
     .from("templates")
-    .select("id, field_map, map_source, map_version, programs(code)");
+    .select("id, variant, field_map, map_source, map_version, programs(code)");
   if (error) throw new Error(error.message);
 
   for (const t of templates ?? []) {
     const code = (t.programs as unknown as { code: string })?.code;
-    const map = templateMaps.find((m) => m.programs.includes(code));
+    const variant = t.variant ?? "standard";
+    const map = templateMaps.find(
+      (m) => m.programs.includes(code) && (m.variant ?? "standard") === variant
+    );
     if (!map) {
-      console.log(`skip ${code}: no in-repo map`);
+      console.log(`skip ${code}/${variant}: no in-repo map`);
       continue;
     }
 

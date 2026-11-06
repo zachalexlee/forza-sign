@@ -20,7 +20,7 @@ export default async function TemplateMapperPage({
 
   const { data: template } = await supabase
     .from("templates")
-    .select("id, version, storage_path, field_map, programs(code, name)")
+    .select("id, version, variant, storage_path, field_map, programs(code, name)")
     .eq("id", id)
     .maybeSingle();
   if (!template) notFound();
@@ -45,14 +45,21 @@ export default async function TemplateMapperPage({
     }
   }
 
-  const suggested = program?.code ? templateMapForProgram(program.code) : undefined;
+  // The suggested (Appendix B) map must match this row's variant — the
+  // tiered placement blank has its own fields and W-9 address lines.
+  const variant = template.variant ?? "standard";
+  const suggested = program?.code ? templateMapForProgram(program.code, variant) : undefined;
 
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-xl font-semibold">{program?.name} — field mapping</h1>
+        <h1 className="text-xl font-semibold">
+          {program?.name}
+          {variant !== "standard" ? ` (${variant})` : ""} — field mapping
+        </h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Template v{template.version}. Assign each PDF form field a dictionary
+          Template v{template.version}
+          {variant !== "standard" ? `, ${variant} variant` : ""}. Assign each PDF form field a dictionary
           key, a constant, or a derived rule. Saved mappings take precedence
           over the built-in Appendix B map.
         </p>

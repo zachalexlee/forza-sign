@@ -6,21 +6,37 @@ insert into organizations (id, name)
 values ('00000000-0000-0000-0000-000000000001', 'Forza Payments, Inc.')
 on conflict do nothing;
 
-insert into programs (org_id, code, name, cash_loading, sort_order) values
-  ('00000000-0000-0000-0000-000000000001', 'mo-ml', 'Merchant Owned / Merchant Load', false, 1),
-  ('00000000-0000-0000-0000-000000000001', 'mo-cl', 'Merchant Owned / Cash Loading', true, 2),
-  ('00000000-0000-0000-0000-000000000001', 'pl-cl', 'Placement / Cash Loading', true, 3)
+-- Four deal structures per processor (office scenario list, Nov 2026).
+insert into programs (org_id, code, name, processor, cash_loading, sort_order) values
+  ('00000000-0000-0000-0000-000000000001', 'pl-cl', 'PAI – Placement / Cash Loading', 'PAI', true, 1),
+  ('00000000-0000-0000-0000-000000000001', 'mo-cl', 'PAI – Merchant-Owned / Third-Party Cash Loading', 'PAI', true, 2),
+  ('00000000-0000-0000-0000-000000000001', 'mo-ml', 'PAI – Merchant-Owned / Merchant-Loaded', 'PAI', false, 3),
+  ('00000000-0000-0000-0000-000000000001', 'dns-pl-cl', 'DNS – Placement / Cash Loading', 'DNS', true, 11),
+  ('00000000-0000-0000-0000-000000000001', 'dns-mo-cl', 'DNS – Merchant-Owned / Third-Party Cash Loading', 'DNS', true, 12),
+  ('00000000-0000-0000-0000-000000000001', 'dns-mo-ml', 'DNS – Merchant-Owned / Merchant-Loaded', 'DNS', false, 13)
 on conflict (code) do nothing;
 
--- Template rows per program. The two cash-loading programs share one packet
--- (same storage path). Field maps live in src/lib/pdf/maps until the Phase 4
--- mapper UI; blank PDFs are uploaded from the admin UI into the templates
+-- Template rows per program (+ the tiered-rebate variant of the PAI
+-- placement). The two PAI cash-loading programs share one packet. Field maps
+-- live in src/lib/pdf/maps (npm run sync:maps seeds them); blank PDFs are in
+-- templates/blanks/ and are uploaded from the admin UI into the templates
 -- bucket at these paths.
 insert into templates (program_id, version, storage_path)
-select p.id, 1, case when p.code = 'mo-ml' then 'blanks/mo-ml-v1.pdf' else 'blanks/cl-v1.pdf' end
+select p.id, 1,
+  case
+    when p.code = 'mo-ml' then 'blanks/mo-ml-v1.pdf'
+    when p.code in ('mo-cl', 'pl-cl') then 'blanks/cl-v1.pdf'
+    else 'blanks/' || p.code || '-v1.pdf'
+  end
 from programs p
-where p.code in ('mo-ml', 'mo-cl', 'pl-cl')
-on conflict (program_id, version) do nothing;
+where p.code in ('mo-ml', 'mo-cl', 'pl-cl', 'dns-pl-cl', 'dns-mo-cl', 'dns-mo-ml')
+on conflict (program_id, variant, version) do nothing;
+
+insert into templates (program_id, variant, version, storage_path)
+select p.id, 'tiered', 1, 'blanks/pl-cl-tiered-v1.pdf'
+from programs p
+where p.code = 'pl-cl'
+on conflict (program_id, variant, version) do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Field dictionary (Appendix A)
@@ -145,5 +161,13 @@ values
 ('atm.price', null, 'ATM Price (per unit)', 'office', 'currency', false, false, false,
   null, null, 'Purchase order unit price — set by the office only.', 45),
 ('sales.rep_name', null, 'Sales Representative', 'office', 'text', false, false, false,
-  null, '{"default": "Lee Boys/"}', null, 50)
+  null, '{"default": "Lee Boys/"}', null, 50),
+('atm.rebate_tier1', null, 'Rebate — 1 to 249 transactions / month', 'office', 'currency', false, false, false,
+  null, null, 'Tiered-rebate packets only.', 21),
+('atm.rebate_tier2', null, 'Rebate — 250 to 499 transactions / month', 'office', 'currency', false, false, false,
+  null, null, 'Tiered-rebate packets only.', 22),
+('atm.rebate_tier3', null, 'Rebate — 500+ transactions / month', 'office', 'currency', false, false, false,
+  null, null, 'Tiered-rebate packets only.', 23),
+('atm.loading_term_years', null, 'Cash Loading Agreement Term (years)', 'office', 'number', false, false, false,
+  null, '{"min": 1, "default": 2}', 'Initial term of the ATM Cash Loading Agreement.', 46)
 on conflict (key) do nothing;

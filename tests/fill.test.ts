@@ -6,7 +6,15 @@ import { encryptField } from "@/lib/crypto";
 import { WorksheetData } from "@/lib/fields/types";
 import { resolveDerived } from "@/lib/pdf/derived";
 import { fillPdf, resolveEntry } from "@/lib/pdf/fill";
-import { cashLoadingMap, merchantLoadMap, templateMapForProgram } from "@/lib/pdf/maps";
+import {
+  cashLoadingMap,
+  dnsMerchantLoadMap,
+  dnsMerchantOwnedCashLoadingMap,
+  dnsPlacementMap,
+  merchantLoadMap,
+  templateMapForProgram,
+  tieredCashLoadingMap,
+} from "@/lib/pdf/maps";
 import { stampAndFlatten } from "@/lib/pdf/stamp";
 import { FillContext } from "@/lib/pdf/types";
 
@@ -65,6 +73,10 @@ function fixtureData(): WorksheetData {
     "atm.rebate": 0.5,
     "atm.count": 1,
     "atm.make_model": "Hyosung Halo II",
+    "atm.rebate_tier1": 0.5,
+    "atm.rebate_tier2": 0.75,
+    "atm.rebate_tier3": 1,
+    "atm.loading_term_years": 2,
     "sales.rep_name": "Lee Boys/",
   };
 }
@@ -125,11 +137,23 @@ describe("derived rules (Appendix C + packet-verified)", () => {
     );
   });
 
-  it("cash loader name: constant for CL variants, merchant's own for ML", () => {
+  it("cash loader name: constant for CL variants, merchant's own for ML (PAI and DNS)", () => {
     expect(resolveDerived("cash_loader_name", ctx("mo-cl"))).toBe("Forza Cash Loader");
     expect(resolveDerived("cash_loader_name", ctx("pl-cl"))).toBe("Forza Cash Loader");
+    expect(resolveDerived("cash_loader_name", ctx("dns-pl-cl"))).toBe("Forza Cash Loader");
     const ml = { ...fixtureData(), "install.cash_loader_name": "Jordan Smith" };
     expect(resolveDerived("cash_loader_name", ctx("mo-ml", ml))).toBe("Jordan Smith");
+    expect(resolveDerived("cash_loader_name", ctx("dns-mo-ml", ml))).toBe("Jordan Smith");
+  });
+
+  it("Security First Bank SOFP radios and the Title/Date line", () => {
+    // LLC → company radio, not the individual one.
+    expect(resolveDerived("sofp_applicant_company", ctx("dns-mo-ml"))).toBe("Choice1");
+    expect(resolveDerived("sofp_applicant_individual", ctx("dns-mo-ml"))).toBe("");
+    const soleProp = { ...fixtureData(), "business.classification": "sole_prop" };
+    expect(resolveDerived("sofp_applicant_company", ctx("dns-mo-ml", soleProp))).toBe("");
+    expect(resolveDerived("sofp_applicant_individual", ctx("dns-mo-ml", soleProp))).toBe("Choice1");
+    expect(resolveDerived("owner_title_date", ctx("dns-mo-ml"))).toBe("Owner / 09/01/2026");
   });
 
   it("wireless fee and written answer follow the wireless box answer", () => {
@@ -174,6 +198,11 @@ describe("template selection", () => {
     expect(templateMapForProgram("mo-ml")?.code).toBe("mo-ml-v1");
     expect(templateMapForProgram("mo-cl")?.code).toBe("cl-v1");
     expect(templateMapForProgram("pl-cl")?.code).toBe("cl-v1");
+    expect(templateMapForProgram("pl-cl", "tiered")?.code).toBe("pl-cl-tiered-v1");
+    expect(templateMapForProgram("mo-cl", "tiered")).toBeUndefined();
+    expect(templateMapForProgram("dns-pl-cl")?.code).toBe("dns-pl-cl-v1");
+    expect(templateMapForProgram("dns-mo-cl")?.code).toBe("dns-mo-cl-v1");
+    expect(templateMapForProgram("dns-mo-ml")?.code).toBe("dns-mo-ml-v1");
     expect(templateMapForProgram("nope")).toBeUndefined();
   });
 });
@@ -245,9 +274,90 @@ describe("fillPdf against the REAL packet PDFs", () => {
     ).toBe("Jordan Smith");
   });
 
+  it("DNS cash-loading packets: every mapped field exists and the DNS ACH page fills", async () => {
+    for (const [code, map, program] of [
+      ["dns-pl-cl-v1", dnsPlacementMap, "dns-pl-cl"],
+      ["dns-mo-cl-v1", dnsMerchantOwnedCashLoadingMap, "dns-mo-cl"],
+    ] as const) {
+      const result = await fillPdf(blankFor(code), map, ctx(program));
+      expect(result.missingFields).toEqual([]);
+      const form = (await PDFDocument.load(result.pdfBytes)).getForm();
+      // DNS ACH Authorization Agreement (p4)
+      expect(form.getTextField("Text1.0").getText()).toBe("Acme Ventures LLC");
+      expect(form.getTextField("Text1.1").getText()).toBe("First Bank of Georgia");
+      expect(form.getTextField("Text1.3").getText()).toBe("Checking");
+      expect(form.getTextField("Text1.4").getText()).toBe("021000021");
+      expect(form.getTextField("Text1.8").getText()).toBe("000123456");
+      expect(form.getTextField("Date").getText()).toBe("09/01/2026");
+      // Cash-loading agreement term + Schedule A
+      expect(form.getTextField("years").getText()).toBe("2");
+      expect(form.getTextField("Cash Loader Name").getText()).toBe("Acme Mart");
+      expect(form.getTextField("Text161.4").getText()).toBe("Atlanta, GA, 30301");
+      expect(form.getCheckBox("Saving").isChecked()).toBe(false);
+    }
+  });
+
+  it("DNS merchant-loaded packet: Security First Bank SOFP pages fill", async () => {
+    const data = { ...fixtureData(), "install.cash_loader_name": "Jordan Smith" };
+    const result = await fillPdf(blankFor("dns-mo-ml-v1"), dnsMerchantLoadMap, ctx("dns-mo-ml", data));
+    expect(result.missingFields).toEqual([]);
+    const form = (await PDFDocument.load(result.pdfBytes)).getForm();
+    expect(form.getRadioGroup("Group2").getSelected()).toBe("Choice1"); // company
+    expect(form.getRadioGroup("Group1").getSelected()).toBeUndefined();
+    expect(form.getRadioGroup("Group3").getSelected()).toBe("Choice3"); // both
+    expect(form.getTextField("1 Name of Location Doing Business As").getText()).toBe("Acme Mart");
+    expect(form.getTextField("Text1").getText()).toBe("LLC - S Corp");
+    expect(form.getTextField("10 Processor of deployed terminal").getText()).toBe(
+      "Digital Network Solutions"
+    );
+    expect(form.getTextField("11 Applicant First Name").getText()).toBe("Jordan");
+    expect(form.getTextField("15 Applicant Social Security Number").getText()).toBe("123-45-6789");
+    expect(form.getTextField("21 Company Federal Employer Identification Number FEIN").getText()).toBe(
+      "12-3456789"
+    );
+    expect(form.getTextField("TitleDate").getText()).toBe("Owner / 09/01/2026");
+    expect(form.getTextField("Corp Address 2").getText()).toBe("Atlanta, GA, 30301");
+    // The ACH page has no fields in this packet: values are drawn at coordinates.
+    expect(result.applied["__dns_ach_routing"]).toBe("021000021");
+    expect(result.applied["__dns_ach_account_number"]).toBe("000123456");
+    expect(form.getTextField("Date").getText()).toBe("09/01/2026");
+    expect(
+      form.getTextField("Cash Loader Name If you are cash loading yourself").getText()
+    ).toBe("Jordan Smith");
+  });
+
+  it("PAI tiered-rebate variant: the three tiers land on both agreement pages", async () => {
+    const result = await fillPdf(blankFor("pl-cl-tiered-v1"), tieredCashLoadingMap, ctx("pl-cl"));
+    expect(result.missingFields).toEqual([]);
+    const form = (await PDFDocument.load(result.pdfBytes)).getForm();
+    expect(form.getTextField("Surcharge").getText()).toBe("3.00"); // application + Schedule A
+    expect(form.getTextField("Rebate234234.0.0").getText()).toBe("3.00"); // p3 surcharge
+    expect(form.getTextField("Rebate234234.0.1").getText()).toBe("0.50");
+    expect(form.getTextField("Tier2 Rebate p3").getText()).toBe("0.75");
+    expect(form.getTextField("Rebate234234.1.0").getText()).toBe("1.00");
+    expect(form.getTextField("Text1345354tw34rtg.1.1").getText()).toBe("0.75"); // p7 tier 2
+    expect(form.getTextField("Corp Address 1").getText()).toBe("100 Main St");
+  });
+
+  it("a checkbox mapping that resolves false clears a pre-checked box", async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage();
+    const box = doc.getForm().createCheckBox("Saving");
+    box.addToPage(page, { x: 10, y: 10, width: 12, height: 12 });
+    box.check();
+    const map = { ...dnsMerchantLoadMap, fields: [{ pdf: "Saving", const: "No", checkbox: { equals: "Yes" } }] };
+    const result = await fillPdf(await doc.save(), map, ctx("dns-mo-ml"));
+    expect((await PDFDocument.load(result.pdfBytes)).getForm().getCheckBox("Saving").isChecked()).toBe(false);
+    expect(result.applied["Saving"]).toBe(false);
+  });
+
   for (const [code, map, program] of [
     ["cl-v1", cashLoadingMap, "mo-cl"],
     ["mo-ml-v1", merchantLoadMap, "mo-ml"],
+    ["pl-cl-tiered-v1", tieredCashLoadingMap, "pl-cl"],
+    ["dns-pl-cl-v1", dnsPlacementMap, "dns-pl-cl"],
+    ["dns-mo-cl-v1", dnsMerchantOwnedCashLoadingMap, "dns-mo-cl"],
+    ["dns-mo-ml-v1", dnsMerchantLoadMap, "dns-mo-ml"],
   ] as const) {
     it(`${code}: stampAndFlatten stamps every customer placement and flattens`, async () => {
       const { pdfBytes } = await fillPdf(blankFor(code), map, ctx(program));

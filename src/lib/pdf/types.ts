@@ -32,6 +32,12 @@ export interface MapEntry {
   /** Center the value in its text field (short pre-printed blanks). */
   align?: "center";
   /**
+   * Fixed font size for a text field. Fields default to auto-size, which
+   * fits the height but clips long values in narrow blanks (e.g. a date in
+   * a 70pt-wide box).
+   */
+  fontSize?: number;
+  /**
    * Coordinate fallback for blanks with no AcroForm field (e.g. the cover
    * sheet's wireless question): draw the resolved value as text at this
    * position instead of filling a form field. `pdf` stays as the entry's
@@ -47,6 +53,8 @@ export interface TemplateMap {
   code: string;
   /** Program codes this template serves */
   programs: string[];
+  /** Template variant within those programs ("standard" when omitted). */
+  variant?: string;
   name: string;
   pageCount: number;
   fields: MapEntry[];

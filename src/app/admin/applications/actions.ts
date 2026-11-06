@@ -13,17 +13,20 @@ import { WorksheetData } from "@/lib/fields/types";
 import { signingUrl } from "@/lib/signing";
 import { digitallySignIfConfigured } from "@/lib/pdf/digital-signature";
 import { PlacementRect, appendCertificatePage, sha256Hex, stampCountersignature } from "@/lib/pdf/stamp";
+import { sendSigningReminder } from "@/lib/reminders";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SIGNING_TOKEN_TTL_DAYS, generateToken, tokenExpiry } from "@/lib/tokens";
 
 /**
- * Create an application from a reviewed worksheet: pick program → resolve
- * template → copy worksheet data (office overrides live on the application).
+ * Create an application from a reviewed worksheet: pick program (+ template
+ * variant, e.g. flat vs. tiered rebate) → resolve template → copy worksheet
+ * data (office overrides live on the application).
  */
 export async function createApplication(input: {
   worksheetId: string;
   programCode: string;
+  variant?: string;
 }): Promise<{ applicationId: string }> {
   const staff = await requireStaff();
   const supabase = createAdminClient();
@@ -47,15 +50,23 @@ export async function createApplication(input: {
     .single();
   if (!program) throw new Error("Unknown program");
 
+  const variant = input.variant?.trim() || "standard";
   const { data: template } = await supabase
     .from("templates")
     .select("id, storage_path, version")
     .eq("program_id", program.id)
+    .eq("variant", variant)
     .eq("active", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!template) throw new Error("No template configured for this program");
+  if (!template) {
+    throw new Error(
+      variant === "standard"
+        ? "No template configured for this program"
+        : "No template configured for this program option"
+    );
+  }
 
   // Office-set defaults from the dictionary (e.g. sales.rep_name).
   const { data: officeDefs } = await supabase
@@ -88,7 +99,7 @@ export async function createApplication(input: {
     org_id: worksheet.org_id,
     worksheet_id: worksheet.id,
     application_id: application.id,
-    meta: { program: program.code, by: staff.fullName },
+    meta: { program: program.code, variant, by: staff.fullName },
   });
 
   await regenerateFilledPdf(application.id);
@@ -171,6 +182,7 @@ export async function uploadTemplateBlank(formData: FormData): Promise<void> {
   if (error) throw new Error(`Upload failed: ${error.message}`);
 
   revalidatePath("/admin/applications");
+  revalidatePath("/admin/templates");
 }
 
 /**
@@ -193,7 +205,7 @@ export async function sendForSignature(input: {
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, org_id, status, filled_pdf_path, programs(code, name), templates(field_map, signature_placements), worksheets(customers(business_name))"
+      "id, org_id, status, filled_pdf_path, programs(code, name), templates(variant, field_map, signature_placements), worksheets(customers(business_name))"
     )
     .eq("id", input.applicationId)
     .eq("org_id", staff.orgId)
@@ -313,6 +325,47 @@ export async function voidApplication(applicationId: string): Promise<void> {
 
   revalidatePath(`/admin/applications/${applicationId}`);
   revalidatePath("/admin/applications");
+}
+
+/**
+ * Staff "Send reminder now": emails every pending signer a fresh link. Also
+ * revives a link that expired, since staff are choosing to chase it.
+ */
+export async function remindSigners(applicationId: string): Promise<{ sent: number }> {
+  const staff = await requireStaff();
+  const supabase = createAdminClient();
+
+  const { data: application } = await supabase
+    .from("applications")
+    .select("id, status, signers(id, status)")
+    .eq("id", applicationId)
+    .eq("org_id", staff.orgId)
+    .single();
+  if (!application) throw new Error("Application not found");
+  if (!["sent", "viewed"].includes(application.status)) {
+    throw new Error("Only applications awaiting signature can be reminded");
+  }
+
+  const pending = (application.signers ?? []).filter((s) =>
+    ["sent", "viewed", "consented"].includes(s.status)
+  );
+  let sent = 0;
+  let busy = false;
+  for (const signer of pending) {
+    const result = await sendSigningReminder(signer.id, { kind: "manual", by: staff.fullName });
+    if (result.ok) sent += 1;
+    else if (result.reason === "busy") busy = true;
+  }
+  if (pending.length > 0 && sent === 0) {
+    throw new Error(
+      busy
+        ? "A reminder is already being sent to this customer — try again in a few minutes"
+        : "The reminder email couldn't be sent — check the email log and try again"
+    );
+  }
+
+  revalidatePath(`/admin/applications/${applicationId}`);
+  return { sent };
 }
 
 /** Revise & resend: void the old application, clone a fresh draft from it. */

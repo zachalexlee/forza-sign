@@ -61,7 +61,7 @@ export async function validateSigningToken(token: string): Promise<SigningValida
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, org_id, status, data, filled_pdf_path, final_pdf_path, programs(code, name), templates(field_map, signature_placements), worksheets(customers(business_name))"
+      "id, org_id, status, data, filled_pdf_path, final_pdf_path, programs(code, name), templates(variant, field_map, signature_placements), worksheets(customers(business_name))"
     )
     .eq("id", signer.application_id)
     .maybeSingle();

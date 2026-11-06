@@ -30,6 +30,19 @@ function applyTransform(value: string, transform: Transform | undefined): string
   }
 }
 
+/**
+ * Pin a text field's font size. Widgets can carry their own default
+ * appearance (/DA), which wins over the field's when appearances are
+ * regenerated, so the size is rewritten on both.
+ */
+function setTextFieldFontSize(field: PDFTextField, size: number): void {
+  field.setFontSize(size);
+  for (const widget of field.acroField.getWidgets()) {
+    const da = widget.getDefaultAppearance();
+    if (da) widget.setDefaultAppearance(da.replace(/(-?\d+(?:\.\d+)?)\s+Tf/, `${size} Tf`));
+  }
+}
+
 /** Resolve one map entry to the value that lands in the PDF. */
 export function resolveEntry(
   entry: MapEntry,
@@ -110,10 +123,16 @@ export async function fillPdf(
       if (value === true) {
         field.check();
         applied[entry.pdf] = true;
+      } else if (value === false && field.isChecked()) {
+        // Blanks sometimes ship with a box pre-checked; a mapping that
+        // resolves false clears it.
+        field.uncheck();
+        applied[entry.pdf] = false;
       }
     } else if (field instanceof PDFTextField) {
       const text = value === true ? "Yes" : String(value);
       if (entry.align === "center") field.setAlignment(TextAlignment.Center);
+      if (entry.fontSize) setTextFieldFontSize(field, entry.fontSize);
       field.setText(text);
       applied[entry.pdf] = text;
     } else {

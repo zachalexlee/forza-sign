@@ -7,6 +7,7 @@ import { FieldInput } from "@/components/worksheet/FieldInput";
 import { FieldDefinition, WorksheetData } from "@/lib/fields/types";
 import {
   countersignApplication,
+  remindSigners,
   reviseAndResend,
   sendForSignature,
   updateApplicationData,
@@ -327,6 +328,38 @@ export function ApplicationEditor({
                   Upload the blank template PDF before sending.
                 </p>
               )}
+            </div>
+          )}
+
+          {(status === "sent" || status === "viewed") && (
+            <div className="mt-3">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={async () => {
+                  setPending(true);
+                  setMessage(null);
+                  try {
+                    const result = await remindSigners(applicationId);
+                    setMessage(
+                      result.sent > 0
+                        ? "Reminder sent ✓ — the signer got a fresh link"
+                        : "Nobody left to remind"
+                    );
+                    router.refresh();
+                  } catch (err) {
+                    setMessage(err instanceof Error ? err.message : "Reminder failed");
+                  } finally {
+                    setPending(false);
+                  }
+                }}
+                className="btn-dark w-full"
+              >
+                Send reminder now
+              </button>
+              <p className="mt-1 text-xs text-zinc-500">
+                Automatic reminders also go out every few days (up to 3) until it&apos;s signed.
+              </p>
             </div>
           )}
 

@@ -85,6 +85,15 @@ export function validateMapEntries(
       entry.align = "center";
     }
 
+    if (e.fontSize !== undefined && e.fontSize !== "") {
+      const size = Number(e.fontSize);
+      if (!Number.isFinite(size) || size <= 0 || size > 72) {
+        errors.push(`${pdf}: fontSize must be a number between 1 and 72`);
+        continue;
+      }
+      entry.fontSize = size;
+    }
+
     if (e.checkbox !== undefined) {
       if (typeof e.checkbox !== "object" || e.checkbox === null) {
         errors.push(`${pdf}: checkbox must be an object like {} or {"equals": value}`);
