@@ -36,7 +36,7 @@ import { MapEntry, TemplateMap } from "../types";
  * legacy NULL) and is older than this. Office-edited maps ('custom') are
  * never auto-updated.
  */
-export const MAP_VERSION = 5;
+export const MAP_VERSION = 6;
 
 // ---------------------------------------------------------------------------
 // Shared fields — identical names in every packet (cover sheet, application,
