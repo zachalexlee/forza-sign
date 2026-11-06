@@ -23,9 +23,15 @@ interface EditorProps {
   initialChangedKeys: string[];
   initialReviewNotes: string;
   events: { event_type: string; ts: string; action?: string }[];
-  programs: { code: string; name: string }[];
+  programs: { code: string; name: string; processor: string | null; variants: string[] }[];
   applications: { id: string; status: string; programName: string }[];
 }
+
+/** Staff-facing labels for template variants (templates.variant). */
+const VARIANT_LABELS: Record<string, string> = {
+  standard: "Flat rebate",
+  tiered: "Tiered rebate (1–249 / 250–499 / 500+ per month)",
+};
 
 export function AdminWorksheetEditor({
   worksheetId,
@@ -41,12 +47,29 @@ export function AdminWorksheetEditor({
 }: EditorProps) {
   const router = useRouter();
   const [programCode, setProgramCode] = useState("");
+  const [variant, setVariant] = useState("standard");
   const [data, setData] = useState<WorksheetData>(initialData);
   const [reviewNotes, setReviewNotes] = useState(initialReviewNotes);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
+
+  // Programs grouped by processor (PAI / DNS) for the picker.
+  const programGroups = useMemo(() => {
+    const groups: { label: string; programs: typeof programs }[] = [];
+    for (const p of programs) {
+      const label = p.processor ?? "Other";
+      let group = groups.find((g) => g.label === label);
+      if (!group) {
+        group = { label, programs: [] };
+        groups.push(group);
+      }
+      group.programs.push(p);
+    }
+    return groups;
+  }, [programs]);
+  const selectedVariants = programs.find((p) => p.code === programCode)?.variants ?? [];
 
   const sections = useMemo(
     () =>
@@ -216,15 +239,39 @@ export function AdminWorksheetEditor({
               <select
                 className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
                 value={programCode}
-                onChange={(e) => setProgramCode(e.target.value)}
+                onChange={(e) => {
+                  setProgramCode(e.target.value);
+                  setVariant("standard");
+                }}
               >
                 <option value="">Select ATM program…</option>
-                {programs.map((p) => (
-                  <option key={p.code} value={p.code}>
-                    {p.name}
-                  </option>
+                {programGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.programs.map((p) => (
+                      <option key={p.code} value={p.code}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
+              {selectedVariants.length > 1 && (
+                <fieldset className="rounded-md border border-zinc-200 p-2 text-sm">
+                  <legend className="px-1 text-xs text-zinc-500">Rebate structure</legend>
+                  {selectedVariants.map((v) => (
+                    <label key={v} className="flex items-center gap-2 py-0.5">
+                      <input
+                        type="radio"
+                        name="variant"
+                        value={v}
+                        checked={variant === v}
+                        onChange={() => setVariant(v)}
+                      />
+                      {VARIANT_LABELS[v] ?? v}
+                    </label>
+                  ))}
+                </fieldset>
+              )}
               <button
                 type="button"
                 disabled={pending || !programCode}
@@ -232,7 +279,7 @@ export function AdminWorksheetEditor({
                   setPending(true);
                   setMessage(null);
                   try {
-                    const result = await createApplication({ worksheetId, programCode });
+                    const result = await createApplication({ worksheetId, programCode, variant });
                     router.push(`/admin/applications/${result.applicationId}`);
                   } catch (err) {
                     setMessage(err instanceof Error ? err.message : "Failed");

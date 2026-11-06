@@ -17,7 +17,7 @@ export async function regenerateFilledPdf(
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, org_id, data, programs(code), templates(storage_path, field_map, signature_placements)"
+      "id, org_id, data, programs(code), templates(variant, storage_path, field_map, signature_placements)"
     )
     .eq("id", applicationId)
     .single();

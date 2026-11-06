@@ -19,12 +19,14 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { SIGNING_TOKEN_TTL_DAYS, generateToken, tokenExpiry } from "@/lib/tokens";
 
 /**
- * Create an application from a reviewed worksheet: pick program → resolve
- * template → copy worksheet data (office overrides live on the application).
+ * Create an application from a reviewed worksheet: pick program (+ template
+ * variant, e.g. flat vs. tiered rebate) → resolve template → copy worksheet
+ * data (office overrides live on the application).
  */
 export async function createApplication(input: {
   worksheetId: string;
   programCode: string;
+  variant?: string;
 }): Promise<{ applicationId: string }> {
   const staff = await requireStaff();
   const supabase = createAdminClient();
@@ -48,15 +50,23 @@ export async function createApplication(input: {
     .single();
   if (!program) throw new Error("Unknown program");
 
+  const variant = input.variant?.trim() || "standard";
   const { data: template } = await supabase
     .from("templates")
     .select("id, storage_path, version")
     .eq("program_id", program.id)
+    .eq("variant", variant)
     .eq("active", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!template) throw new Error("No template configured for this program");
+  if (!template) {
+    throw new Error(
+      variant === "standard"
+        ? "No template configured for this program"
+        : "No template configured for this program option"
+    );
+  }
 
   // Office-set defaults from the dictionary (e.g. sales.rep_name).
   const { data: officeDefs } = await supabase
@@ -89,7 +99,7 @@ export async function createApplication(input: {
     org_id: worksheet.org_id,
     worksheet_id: worksheet.id,
     application_id: application.id,
-    meta: { program: program.code, by: staff.fullName },
+    meta: { program: program.code, variant, by: staff.fullName },
   });
 
   await regenerateFilledPdf(application.id);
@@ -172,6 +182,7 @@ export async function uploadTemplateBlank(formData: FormData): Promise<void> {
   if (error) throw new Error(`Upload failed: ${error.message}`);
 
   revalidatePath("/admin/applications");
+  revalidatePath("/admin/templates");
 }
 
 /**
@@ -194,7 +205,7 @@ export async function sendForSignature(input: {
   const { data: application } = await supabase
     .from("applications")
     .select(
-      "id, org_id, status, filled_pdf_path, programs(code, name), templates(field_map, signature_placements), worksheets(customers(business_name))"
+      "id, org_id, status, filled_pdf_path, programs(code, name), templates(variant, field_map, signature_placements), worksheets(customers(business_name))"
     )
     .eq("id", input.applicationId)
     .eq("org_id", staff.orgId)

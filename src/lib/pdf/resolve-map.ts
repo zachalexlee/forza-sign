@@ -13,6 +13,8 @@ import { MapEntry, TemplateMap } from "./types";
 export interface TemplateRowMaps {
   field_map: unknown;
   signature_placements: unknown;
+  /** templates.variant — "standard" unless the row says otherwise */
+  variant?: string | null;
 }
 
 function isMapEntryArray(v: unknown): v is MapEntry[] {
@@ -49,7 +51,7 @@ export function resolveTemplateMap(
   row: TemplateRowMaps | null | undefined,
   programCode: string
 ): TemplateMap | undefined {
-  const fallback = templateMapForProgram(programCode);
+  const fallback = templateMapForProgram(programCode, row?.variant ?? "standard");
   if (!row) return fallback;
 
   const dbFields = isMapEntryArray(row.field_map) ? row.field_map : undefined;

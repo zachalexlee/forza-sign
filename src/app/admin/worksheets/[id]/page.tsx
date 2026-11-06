@@ -30,11 +30,30 @@ export default async function WorksheetReviewPage({
     .order("ts", { ascending: true });
 
   const defs = await loadCustomerFieldDefinitions(supabase);
-  const { data: programs } = await supabase
+  const { data: programRows } = await supabase
     .from("programs")
-    .select("code, name")
+    .select("code, name, processor")
     .eq("active", true)
     .order("sort_order");
+  // Template variants per program (e.g. flat vs. tiered rebate) drive the
+  // option shown next to the program picker.
+  const { data: templateRows } = await supabase
+    .from("templates")
+    .select("variant, programs(code)")
+    .eq("active", true);
+  const variantsByProgram = new Map<string, Set<string>>();
+  for (const t of templateRows ?? []) {
+    const code = (t.programs as unknown as { code: string } | null)?.code;
+    if (!code) continue;
+    if (!variantsByProgram.has(code)) variantsByProgram.set(code, new Set());
+    variantsByProgram.get(code)!.add(t.variant ?? "standard");
+  }
+  const programs = (programRows ?? []).map((p) => ({
+    code: p.code,
+    name: p.name,
+    processor: p.processor as string | null,
+    variants: [...(variantsByProgram.get(p.code) ?? new Set(["standard"]))].sort(),
+  }));
   const { data: applications } = await supabase
     .from("applications")
     .select("id, status, programs(name)")
@@ -86,7 +105,7 @@ export default async function WorksheetReviewPage({
           ts: e.ts,
           action: (e.meta as { action?: string })?.action,
         }))}
-        programs={programs ?? []}
+        programs={programs}
         applications={(applications ?? []).map((a) => ({
           id: a.id,
           status: a.status,
