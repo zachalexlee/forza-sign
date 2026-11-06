@@ -121,8 +121,14 @@ export async function reissueWorksheetLink(
     .single();
   if (!worksheet) throw new Error("Worksheet not found");
 
-  // Rotate under the worksheet's link lease so this can't interleave with a
-  // reminder's rotation (lib/reminders).
+  const customer = worksheet.customers as unknown as {
+    business_name: string;
+    email: string | null;
+  } | null;
+
+  // Rotate — and deliver the invite — under the worksheet's link lease so a
+  // reminder (lib/reminders) can't interleave with the rotation or revoke
+  // the new link while its email is still on the way.
   const { token, hash } = generateToken();
   const rotated = await withWorksheetLinkLease(worksheetId, async () => {
     const { error: revokeError } = await supabase
@@ -138,39 +144,34 @@ export async function reissueWorksheetLink(
       expires_at: tokenExpiry(WORKSHEET_TOKEN_TTL_DAYS).toISOString(),
     });
     if (error) throw new Error(`Could not create link: ${error.message}`);
+
+    await logAuditEvent({
+      event_type: "sent",
+      org_id: worksheet.org_id,
+      worksheet_id: worksheetId,
+      meta: { action: "link_reissued", by: staff.fullName },
+    });
+
+    if (sendInvite && customer?.email) {
+      const email = worksheetInviteEmail({
+        businessName: customer.business_name,
+        link: worksheetUrl(token),
+        expiresDays: WORKSHEET_TOKEN_TTL_DAYS,
+      });
+      await sendEmail({
+        to: customer.email,
+        ...email,
+        template: "worksheet_invite",
+        org_id: worksheet.org_id,
+        worksheet_id: worksheetId,
+      });
+    }
     return true;
   });
   if (!rotated) {
     throw new Error(
       "A reminder is being sent to this customer right now — try again in a few minutes"
     );
-  }
-
-  const customer = worksheet.customers as unknown as {
-    business_name: string;
-    email: string | null;
-  } | null;
-
-  await logAuditEvent({
-    event_type: "sent",
-    org_id: worksheet.org_id,
-    worksheet_id: worksheetId,
-    meta: { action: "link_reissued", by: staff.fullName },
-  });
-
-  if (sendInvite && customer?.email) {
-    const email = worksheetInviteEmail({
-      businessName: customer.business_name,
-      link: worksheetUrl(token),
-      expiresDays: WORKSHEET_TOKEN_TTL_DAYS,
-    });
-    await sendEmail({
-      to: customer.email,
-      ...email,
-      template: "worksheet_invite",
-      org_id: worksheet.org_id,
-      worksheet_id: worksheetId,
-    });
   }
 
   revalidatePath(`/admin/worksheets/${worksheetId}`);
