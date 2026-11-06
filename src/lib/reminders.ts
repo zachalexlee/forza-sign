@@ -19,6 +19,11 @@ import { worksheetUrl } from "@/lib/worksheets";
  * token: the email carries a fresh link and the older link stops working.
  * If the provider rejects the email, the rotation is rolled back so the
  * customer's existing link keeps working and no reminder is recorded.
+ *
+ * Each reminder holds a short per-customer lease (reminder_state, migration
+ * 00009) from rotation through delivery and rollback, so two reminders for
+ * the same customer never overlap. The automatic count is reserved when the
+ * lease is taken, so the cap can't be lost to a later failed write.
  */
 
 /** Days of quiet before an automatic reminder (REMINDER_AFTER_DAYS). */
@@ -58,9 +63,14 @@ export function latest(...dates: (string | null | undefined)[]): string | null {
 
 export type ReminderResult =
   | { ok: true }
-  | { ok: false; reason: "not_found" | "not_pending" | "no_email" | "send_failed" };
+  | {
+      ok: false;
+      /** busy: another reminder holds the lease (or, automatic: not due / capped). */
+      reason: "not_found" | "not_pending" | "no_email" | "send_failed" | "busy";
+    };
 
 type ReminderMode = { kind: "automatic" } | { kind: "manual"; by: string };
+type ReminderKind = "signer" | "worksheet";
 
 function modeMeta(mode: ReminderMode) {
   return mode.kind === "manual"
@@ -68,10 +78,65 @@ function modeMeta(mode: ReminderMode) {
     : { action: "automatic_reminder" };
 }
 
+/** Longer than any one rotate + send + rollback; a crashed holder expires. */
+const LEASE_SECONDS = 10 * 60;
+
+/**
+ * Run `send` while holding the subject's reminder lease. `send` calls
+ * `delivered()` as soon as the email is accepted, so the reservation stands
+ * even if something after delivery fails; otherwise it's undone on release.
+ */
+async function withReminderLease(
+  kind: ReminderKind,
+  subjectId: string,
+  mode: ReminderMode,
+  send: (delivered: () => void) => Promise<ReminderResult>
+): Promise<ReminderResult> {
+  const supabase = createAdminClient();
+  const automatic = mode.kind === "automatic";
+  const { data: claims, error: claimError } = await supabase.rpc("claim_reminder", {
+    p_kind: kind,
+    p_subject_id: subjectId,
+    p_automatic: automatic,
+    p_max_automatic: MAX_AUTO_REMINDERS,
+    p_not_since: new Date(Date.now() - reminderAfterDays() * DAY_MS).toISOString(),
+    p_lease_seconds: LEASE_SECONDS,
+  });
+  const claim = (claims as { lock_id: string; prev_last_reminder_at: string | null }[] | null)?.[0];
+  if (claimError || !claim) return { ok: false, reason: "busy" };
+
+  let sent = false;
+  try {
+    return await send(() => {
+      sent = true;
+    });
+  } finally {
+    // If this fails the lease simply expires; a delivered reminder stays counted.
+    await supabase.rpc("release_reminder", {
+      p_kind: kind,
+      p_subject_id: subjectId,
+      p_lock_id: claim.lock_id,
+      p_sent: sent,
+      p_automatic: automatic,
+      p_prev_last_reminder_at: claim.prev_last_reminder_at,
+    });
+  }
+}
+
 /** Remind one signer with a fresh signing link. */
 export async function sendSigningReminder(
   signerId: string,
   mode: ReminderMode
+): Promise<ReminderResult> {
+  return withReminderLease("signer", signerId, mode, (delivered) =>
+    remindSigner(signerId, mode, delivered)
+  );
+}
+
+async function remindSigner(
+  signerId: string,
+  mode: ReminderMode,
+  delivered: () => void
 ): Promise<ReminderResult> {
   const supabase = createAdminClient();
   const { data: signer } = await supabase
@@ -98,9 +163,8 @@ export async function sendSigningReminder(
     return { ok: false, reason: "not_pending" };
   }
 
-  // Compare-and-swap on the current token: if another reminder (cron vs.
-  // staff button) rotated it since we read it, back off rather than
-  // invalidate the link that one just emailed.
+  // Compare-and-swap on the token we read: if anything else rotated it
+  // since (e.g. a resend), back off rather than invalidate that link.
   const { token, hash } = generateToken();
   const { data: rotated, error: rotateError } = await supabase
     .from("signers")
@@ -139,6 +203,7 @@ export async function sendSigningReminder(
       .eq("token_hash", hash);
     return { ok: false, reason: "send_failed" };
   }
+  delivered();
 
   await logAuditEvent({
     event_type: "reminder_sent",
@@ -154,6 +219,16 @@ export async function sendSigningReminder(
 export async function sendWorksheetReminder(
   worksheetId: string,
   mode: ReminderMode
+): Promise<ReminderResult> {
+  return withReminderLease("worksheet", worksheetId, mode, (delivered) =>
+    remindWorksheet(worksheetId, mode, delivered)
+  );
+}
+
+async function remindWorksheet(
+  worksheetId: string,
+  mode: ReminderMode,
+  delivered: () => void
 ): Promise<ReminderResult> {
   const supabase = createAdminClient();
   const { data: worksheet } = await supabase
@@ -191,22 +266,23 @@ export async function sendWorksheetReminder(
     .single();
   if (linkError || !newLink) return { ok: false, reason: "send_failed" };
 
+  // Stamp our revocations with one timestamp so a rollback can undo exactly
+  // these and nothing another rotation (e.g. staff reissuing) revoked.
+  const revokedAt = new Date().toISOString();
+  let revokedIds: string[] = [];
   if (activeIds.length > 0) {
-    // Only revoke links that are still active; if another reminder already
+    // Only revoke links that are still active; if something else already
     // rotated them (or the update fails), undo ours instead of leaving two
     // valid customer links.
     const { data: revoked, error: revokeError } = await supabase
       .from("worksheet_links")
-      .update({ revoked_at: new Date().toISOString() })
+      .update({ revoked_at: revokedAt })
       .in("id", activeIds)
       .is("revoked_at", null)
       .select("id");
-    if (revokeError || !revoked || revoked.length !== activeIds.length) {
-      await supabase.from("worksheet_links").delete().eq("id", newLink.id);
-      const ours = (revoked ?? []).map((l) => l.id);
-      if (ours.length > 0) {
-        await supabase.from("worksheet_links").update({ revoked_at: null }).in("id", ours);
-      }
+    revokedIds = (revoked ?? []).map((l) => l.id);
+    if (revokeError || revokedIds.length !== activeIds.length) {
+      await rollBackWorksheetRotation(newLink.id, revokedIds, revokedAt);
       return { ok: false, reason: "send_failed" };
     }
   }
@@ -225,12 +301,10 @@ export async function sendWorksheetReminder(
   });
 
   if (!delivery.ok) {
-    await supabase.from("worksheet_links").delete().eq("id", newLink.id);
-    if (activeIds.length > 0) {
-      await supabase.from("worksheet_links").update({ revoked_at: null }).in("id", activeIds);
-    }
+    await rollBackWorksheetRotation(newLink.id, revokedIds, revokedAt);
     return { ok: false, reason: "send_failed" };
   }
+  delivered();
 
   await logAuditEvent({
     event_type: "reminder_sent",
@@ -239,6 +313,59 @@ export async function sendWorksheetReminder(
     meta: modeMeta(mode),
   });
   return { ok: true };
+}
+
+/**
+ * Undo a worksheet link rotation, but only if it's still the latest one: if
+ * our new link was already revoked, a later rotation superseded us and the
+ * links we revoked must stay revoked.
+ */
+async function rollBackWorksheetRotation(
+  newLinkId: string,
+  revokedIds: string[],
+  revokedAt: string
+): Promise<void> {
+  const supabase = createAdminClient();
+  const { data: stillLive } = await supabase
+    .from("worksheet_links")
+    .delete()
+    .eq("id", newLinkId)
+    .is("revoked_at", null)
+    .select("id");
+  if (!stillLive || stillLive.length === 0) {
+    await supabase.from("worksheet_links").delete().eq("id", newLinkId);
+    return;
+  }
+  if (revokedIds.length > 0) {
+    await supabase
+      .from("worksheet_links")
+      .update({ revoked_at: null })
+      .in("id", revokedIds)
+      .eq("revoked_at", revokedAt);
+  }
+}
+
+/** Reminder bookkeeping for a batch of subjects; null if unreadable. */
+async function loadReminderStates(
+  kind: ReminderKind,
+  ids: string[]
+): Promise<Map<string, { autoSent: number; lastReminderAt: string | null }> | null> {
+  const states = new Map<string, { autoSent: number; lastReminderAt: string | null }>();
+  if (ids.length === 0) return states;
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("reminder_state")
+    .select("subject_id, auto_reminders_sent, last_reminder_at")
+    .eq("kind", kind)
+    .in("subject_id", ids);
+  if (error) return null;
+  for (const row of data ?? []) {
+    states.set(row.subject_id, {
+      autoSent: row.auto_reminders_sent,
+      lastReminderAt: row.last_reminder_at,
+    });
+  }
+  return states;
 }
 
 /** Daily sweep: automatic reminders for everything that's gone quiet. */
@@ -256,8 +383,13 @@ export async function runAutomaticReminders(now: Date = new Date()): Promise<{
     .from("signers")
     .select("id, status, token_expires_at, applications(status, sent_at)")
     .in("status", ["sent", "viewed", "consented"]);
+  // An unreadable history must not look like "no reminders yet".
+  const signerStates = await loadReminderStates(
+    "signer",
+    (signers ?? []).map((s) => s.id)
+  );
 
-  for (const signer of signers ?? []) {
+  for (const signer of signerStates ? signers ?? [] : []) {
     const application = signer.applications as unknown as {
       status: string;
       sent_at: string | null;
@@ -266,22 +398,11 @@ export async function runAutomaticReminders(now: Date = new Date()): Promise<{
     // An expired link means the office let it lapse — don't revive it.
     if (signer.token_expires_at && new Date(signer.token_expires_at) <= now) continue;
 
-    const { data: reminders, error: remindersError } = await supabase
-      .from("audit_events")
-      .select("ts, meta")
-      .eq("signer_id", signer.id)
-      .eq("event_type", "reminder_sent")
-      .order("ts", { ascending: false });
-    // An unreadable history must not look like "no reminders yet".
-    if (remindersError) continue;
-    const autoSent = (reminders ?? []).filter(
-      (r) => (r.meta as { action?: string } | null)?.action !== "manual_reminder"
-    ).length;
-
+    const state = signerStates?.get(signer.id);
     if (
       autoReminderDue({
-        lastTouch: latest(application.sent_at, reminders?.[0]?.ts),
-        autoRemindersSent: autoSent,
+        lastTouch: latest(application.sent_at, state?.lastReminderAt),
+        autoRemindersSent: state?.autoSent ?? 0,
         afterDays,
         now,
       }) &&
@@ -296,8 +417,12 @@ export async function runAutomaticReminders(now: Date = new Date()): Promise<{
     .from("worksheets")
     .select("id, updated_at")
     .in("status", ["sent", "in_progress"]);
+  const worksheetStates = await loadReminderStates(
+    "worksheet",
+    (worksheets ?? []).map((w) => w.id)
+  );
 
-  for (const worksheet of worksheets ?? []) {
+  for (const worksheet of worksheetStates ? worksheets ?? [] : []) {
     const { data: lastEmail, error: lastEmailError } = await supabase
       .from("email_log")
       .select("sent_at")
@@ -310,21 +435,12 @@ export async function runAutomaticReminders(now: Date = new Date()): Promise<{
     // Never emailed (office filling it in, or link handed over manually).
     if (lastEmailError || !lastEmail) continue;
 
-    const { data: reminders, error: remindersError } = await supabase
-      .from("audit_events")
-      .select("meta")
-      .eq("worksheet_id", worksheet.id)
-      .eq("event_type", "reminder_sent");
-    if (remindersError) continue;
-    const autoSent = (reminders ?? []).filter(
-      (r) => (r.meta as { action?: string } | null)?.action !== "manual_reminder"
-    ).length;
-
+    const state = worksheetStates?.get(worksheet.id);
     if (
       autoReminderDue({
         // A customer who saved recently is actively working — don't nag.
-        lastTouch: latest(lastEmail.sent_at, worksheet.updated_at),
-        autoRemindersSent: autoSent,
+        lastTouch: latest(lastEmail.sent_at, worksheet.updated_at, state?.lastReminderAt),
+        autoRemindersSent: state?.autoSent ?? 0,
         afterDays,
         now,
       }) &&

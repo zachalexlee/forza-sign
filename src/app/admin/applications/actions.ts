@@ -339,12 +339,18 @@ export async function remindSigners(applicationId: string): Promise<{ sent: numb
     ["sent", "viewed", "consented"].includes(s.status)
   );
   let sent = 0;
+  let busy = false;
   for (const signer of pending) {
     const result = await sendSigningReminder(signer.id, { kind: "manual", by: staff.fullName });
     if (result.ok) sent += 1;
+    else if (result.reason === "busy") busy = true;
   }
   if (pending.length > 0 && sent === 0) {
-    throw new Error("The reminder email couldn't be sent — check the email log and try again");
+    throw new Error(
+      busy
+        ? "A reminder is already being sent to this customer — try again in a few minutes"
+        : "The reminder email couldn't be sent — check the email log and try again"
+    );
   }
 
   revalidatePath(`/admin/applications/${applicationId}`);
