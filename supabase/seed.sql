@@ -17,7 +17,7 @@ insert into programs (org_id, code, name, processor, cash_loading, sort_order) v
 on conflict (code) do nothing;
 
 -- Template rows per program (+ the tiered-rebate variant of the PAI
--- placement). The two PAI cash-loading programs share one packet. Field maps
+-- placement). Field maps
 -- live in src/lib/pdf/maps (npm run sync:maps seeds them); blank PDFs are in
 -- templates/blanks/ and are uploaded from the admin UI into the templates
 -- bucket at these paths.
@@ -25,7 +25,8 @@ insert into templates (program_id, version, storage_path)
 select p.id, 1,
   case
     when p.code = 'mo-ml' then 'blanks/mo-ml-v1.pdf'
-    when p.code in ('mo-cl', 'pl-cl') then 'blanks/cl-v1.pdf'
+    when p.code = 'mo-cl' then 'blanks/cl-v1.pdf'
+    when p.code = 'pl-cl' then 'blanks/pl-cl-v2.pdf'
     else 'blanks/' || p.code || '-v1.pdf'
   end
 from programs p
@@ -169,5 +170,8 @@ values
 ('atm.rebate_tier3', null, 'Rebate — 500+ transactions / month', 'office', 'currency', false, false, false,
   null, null, 'Tiered-rebate packets only.', 23),
 ('atm.loading_term_years', null, 'Cash Loading Agreement Term (years)', 'office', 'number', false, false, false,
-  null, '{"min": 1, "default": 2}', 'Initial term of the ATM Cash Loading Agreement.', 46)
+  null, '{"min": 1, "default": 2}', 'Initial term of the ATM Cash Loading Agreement.', 46),
+('atm.retained_transactions', null, 'Forza Retains the First (transactions)', 'office', 'select', false, false, false,
+  '[{"value":"100","label":"100 transactions"},{"value":"150","label":"150 transactions"},{"value":"200","label":"200 transactions"}]',
+  '{"default": "100"}', 'PAI placement only: no merchant rebate on the first N transactions.', 24)
 on conflict (key) do nothing;
