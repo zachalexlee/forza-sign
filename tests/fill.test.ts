@@ -12,6 +12,7 @@ import {
   dnsMerchantOwnedCashLoadingMap,
   dnsPlacementMap,
   merchantLoadMap,
+  placementMap,
   templateMapForProgram,
   tieredCashLoadingMap,
 } from "@/lib/pdf/maps";
@@ -77,6 +78,7 @@ function fixtureData(): WorksheetData {
     "atm.rebate_tier2": 0.75,
     "atm.rebate_tier3": 1,
     "atm.loading_term_years": 2,
+    "atm.retained_transactions": "150",
     "sales.rep_name": "Lee Boys/",
   };
 }
@@ -156,6 +158,12 @@ describe("derived rules (Appendix C + packet-verified)", () => {
     expect(resolveDerived("owner_title_date", ctx("dns-mo-ml"))).toBe("Owner / 09/01/2026");
   });
 
+  it("retained transaction count in words for the PAI placement agreement", () => {
+    expect(resolveDerived("retained_transactions_words", ctx("pl-cl"))).toBe("one hundred fifty (150)");
+    const none = { ...fixtureData(), "atm.retained_transactions": "" };
+    expect(resolveDerived("retained_transactions_words", ctx("pl-cl", none))).toBe("");
+  });
+
   it("wireless fee and written answer follow the wireless box answer", () => {
     expect(resolveDerived("wireless_fee", ctx("mo-cl"))).toBe("25.95");
     expect(resolveDerived("wireless_yes_no", ctx("mo-cl"))).toBe("Yes");
@@ -197,7 +205,7 @@ describe("template selection", () => {
   it("routes programs to the right packet", () => {
     expect(templateMapForProgram("mo-ml")?.code).toBe("mo-ml-v1");
     expect(templateMapForProgram("mo-cl")?.code).toBe("cl-v1");
-    expect(templateMapForProgram("pl-cl")?.code).toBe("cl-v1");
+    expect(templateMapForProgram("pl-cl")?.code).toBe("pl-cl-v2");
     expect(templateMapForProgram("pl-cl", "tiered")?.code).toBe("pl-cl-tiered-v1");
     expect(templateMapForProgram("mo-cl", "tiered")).toBeUndefined();
     expect(templateMapForProgram("dns-pl-cl")?.code).toBe("dns-pl-cl-v1");
@@ -326,6 +334,20 @@ describe("fillPdf against the REAL packet PDFs", () => {
     ).toBe("Jordan Smith");
   });
 
+  it("PAI placement (flat): the retained count, rebate and surcharge land on both agreements", async () => {
+    const result = await fillPdf(blankFor("pl-cl-v2"), placementMap, ctx("pl-cl"));
+    expect(result.missingFields).toEqual([]);
+    const form = (await PDFDocument.load(result.pdfBytes)).getForm();
+    expect(form.getTextField("Retained Transactions 1").getText()).toBe("one hundred fifty (150)");
+    expect(form.getTextField("Retained Transactions 2").getText()).toBe("one hundred fifty (150)");
+    expect(form.getTextField("Rebate p3").getText()).toBe("0.50");
+    expect(form.getTextField("Surcharge p3").getText()).toBe("3.00");
+    expect(form.getTextField("Rebate p7").getText()).toBe("0.50");
+    expect(form.getTextField("Surcharge p7").getText()).toBe("3.00");
+    // No tiered leftovers.
+    expect(() => form.getField("Tier2 Rebate p3")).toThrow();
+  });
+
   it("PAI tiered-rebate variant: the three tiers land on both agreement pages", async () => {
     const result = await fillPdf(blankFor("pl-cl-tiered-v1"), tieredCashLoadingMap, ctx("pl-cl"));
     expect(result.missingFields).toEqual([]);
@@ -354,6 +376,7 @@ describe("fillPdf against the REAL packet PDFs", () => {
   for (const [code, map, program] of [
     ["cl-v1", cashLoadingMap, "mo-cl"],
     ["mo-ml-v1", merchantLoadMap, "mo-ml"],
+    ["pl-cl-v2", placementMap, "pl-cl"],
     ["pl-cl-tiered-v1", tieredCashLoadingMap, "pl-cl"],
     ["dns-pl-cl-v1", dnsPlacementMap, "dns-pl-cl"],
     ["dns-mo-cl-v1", dnsMerchantOwnedCashLoadingMap, "dns-mo-cl"],

@@ -212,6 +212,19 @@ const cashLoading: MapEntry[] = [
   // Surcharge / Rebate; rows 2-4 stay office-filled.
 ];
 
+// PAI placement, flat rebate (pl-cl-v2): the processing agreement's "After
+// Installation" item 1 and the cash-loading agreement's rebate paragraph
+// carry blanks for the retained transaction count (100 / 150 / 200, the
+// office's choice), the rebate and the surcharge.
+const placementFlat: MapEntry[] = [
+  { pdf: "Retained Transactions 1", derived: "retained_transactions_words", fontSize: 7.5, note: "p3 item 1: no rebate on the first N transactions" },
+  { pdf: "Retained Transactions 2", derived: "retained_transactions_words", fontSize: 7.5, note: "p3 item 1: rebate starts after the first N" },
+  { pdf: "Rebate p3", source: "atm.rebate", transform: "currency", fontSize: 8 },
+  { pdf: "Surcharge p3", source: "atm.surcharge", transform: "currency", fontSize: 8 },
+  { pdf: "Rebate p7", source: "atm.rebate", transform: "currency", fontSize: 11, note: "cash-loading agreement rebate paragraph" },
+  { pdf: "Surcharge p7", source: "atm.surcharge", transform: "currency", fontSize: 11 },
+];
+
 // PAI placement, tiered-rebate variant: the flat-rebate paragraph is
 // replaced by three volume bands on the processing agreement (p3) and the
 // cash-loading agreement (p7). "Tier2 Rebate p3" is the 250–499 blank on p3,
@@ -352,13 +365,27 @@ export const merchantLoadMap: TemplateMap = {
   signaturePlacements: paiMlSignatures,
 };
 
-/** PAI cash-loading packet — 8 pages, shared by placement and merchant-owned. */
+/** PAI merchant-owned, Forza-loaded packet — 8 pages. */
 export const cashLoadingMap: TemplateMap = {
   code: "cl-v1",
-  programs: ["mo-cl", "pl-cl"],
-  name: "PAI – Merchant-Owned or Placement / Cash Loading",
+  programs: ["mo-cl"],
+  name: "PAI – Merchant-Owned / Third-Party Cash Loading",
   pageCount: 8,
   fields: [...shared, ...paiAch, ...w9DigitBoxes, ...w9AddressOneLine, ...cashLoading],
+  signaturePlacements: paiClSignatures,
+};
+
+/**
+ * PAI placement, flat rebate — 8 pages. Built from the tiered packet (the
+ * only PAI packet with the placement agreement) with the flat paragraphs
+ * and fillable blanks, so it shares that packet's W-9 layout.
+ */
+export const placementMap: TemplateMap = {
+  code: "pl-cl-v2",
+  programs: ["pl-cl"],
+  name: "PAI – Placement / Cash Loading",
+  pageCount: 8,
+  fields: [...shared, ...paiAch, ...w9DigitBoxes, ...w9AddressTwoLines, ...cashLoading, ...placementFlat],
   signaturePlacements: paiClSignatures,
 };
 
@@ -417,6 +444,7 @@ export const dnsMerchantLoadMap: TemplateMap = {
 export const templateMaps: TemplateMap[] = [
   merchantLoadMap,
   cashLoadingMap,
+  placementMap,
   tieredCashLoadingMap,
   dnsPlacementMap,
   dnsMerchantOwnedCashLoadingMap,

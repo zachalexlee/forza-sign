@@ -53,6 +53,7 @@ export const DERIVED_RULE_NAMES = [
   "sofp_applicant_individual",
   "sofp_applicant_company",
   "owner_title_date",
+  "retained_transactions_words",
 ] as const;
 
 export function resolveDerived(rule: string, ctx: FillContext): string | boolean {
@@ -223,6 +224,17 @@ export function resolveDerived(rule: string, ctx: FillContext): string | boolean
     // Its Section E signature block has one "Title/Date" line.
     case "owner_title_date":
       return `Owner / ${resolveDerived("send_date_us", ctx)}`;
+
+    // PAI placement: "no Merchant Rebate shall be paid for the first ____
+    // completed ... transactions" — the office picks 100 / 150 / 200.
+    case "retained_transactions_words":
+      return (
+        {
+          "100": "one hundred (100)",
+          "150": "one hundred fifty (150)",
+          "200": "two hundred (200)",
+        }[str(data, "atm.retained_transactions")] ?? ""
+      );
 
     // The cover sheet's wireless question is a written answer, not a checkbox.
     case "wireless_yes_no":
