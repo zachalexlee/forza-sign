@@ -82,18 +82,19 @@ function modeMeta(mode: ReminderMode) {
 const LEASE_SECONDS = 10 * 60;
 
 /**
- * Run `send` while holding the subject's reminder lease. `send` calls
- * `delivered()` as soon as the email is accepted, so the reservation stands
- * even if something after delivery fails; otherwise it's undone on release.
+ * Run `fn` while holding the subject's lease. `fn` calls `delivered()` once a
+ * reminder email is accepted, so the reservation (count + last-reminder time)
+ * stands even if something after delivery fails; otherwise it's undone on
+ * release. Returns null when the lease is held by someone else (or, for
+ * automatic claims, when the subject is capped or not due).
  */
-async function withReminderLease(
+async function withLease<T>(
   kind: ReminderKind,
   subjectId: string,
-  mode: ReminderMode,
-  send: (delivered: () => void) => Promise<ReminderResult>
-): Promise<ReminderResult> {
+  automatic: boolean,
+  fn: (delivered: () => void) => Promise<T>
+): Promise<T | null> {
   const supabase = createAdminClient();
-  const automatic = mode.kind === "automatic";
   const { data: claims, error: claimError } = await supabase.rpc("claim_reminder", {
     p_kind: kind,
     p_subject_id: subjectId,
@@ -103,11 +104,11 @@ async function withReminderLease(
     p_lease_seconds: LEASE_SECONDS,
   });
   const claim = (claims as { lock_id: string; prev_last_reminder_at: string | null }[] | null)?.[0];
-  if (claimError || !claim) return { ok: false, reason: "busy" };
+  if (claimError || !claim) return null;
 
   let sent = false;
   try {
-    return await send(() => {
+    return await fn(() => {
       sent = true;
     });
   } finally {
@@ -121,6 +122,32 @@ async function withReminderLease(
       p_prev_last_reminder_at: claim.prev_last_reminder_at,
     });
   }
+}
+
+async function withReminderLease(
+  kind: ReminderKind,
+  subjectId: string,
+  mode: ReminderMode,
+  send: (delivered: () => void) => Promise<ReminderResult>
+): Promise<ReminderResult> {
+  return (await withLease(kind, subjectId, mode.kind === "automatic", send)) ?? {
+    ok: false,
+    reason: "busy",
+  };
+}
+
+/**
+ * Every other rotation of a worksheet's links (staff reissuing a link) takes
+ * the same lease, so it can never interleave with a reminder's rotation and
+ * leave two valid customer links or revoke a link whose email is in flight.
+ * Nothing is counted as a reminder. Returns null when a reminder holds the
+ * lease right now.
+ */
+export async function withWorksheetLinkLease<T>(
+  worksheetId: string,
+  fn: () => Promise<T>
+): Promise<T | null> {
+  return withLease("worksheet", worksheetId, false, () => fn());
 }
 
 /** Remind one signer with a fresh signing link. */

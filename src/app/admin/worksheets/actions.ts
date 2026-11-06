@@ -6,6 +6,7 @@ import { sendEmail, worksheetInviteEmail } from "@/lib/email";
 import { validateWorksheetData } from "@/lib/fields/schema";
 import { encryptSensitiveValues, validationView } from "@/lib/fields/sensitive";
 import { WorksheetData } from "@/lib/fields/types";
+import { withWorksheetLinkLease } from "@/lib/reminders";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { WORKSHEET_TOKEN_TTL_DAYS, generateToken, tokenExpiry } from "@/lib/tokens";
@@ -120,19 +121,30 @@ export async function reissueWorksheetLink(
     .single();
   if (!worksheet) throw new Error("Worksheet not found");
 
-  await supabase
-    .from("worksheet_links")
-    .update({ revoked_at: new Date().toISOString() })
-    .eq("worksheet_id", worksheetId)
-    .is("revoked_at", null);
-
+  // Rotate under the worksheet's link lease so this can't interleave with a
+  // reminder's rotation (lib/reminders).
   const { token, hash } = generateToken();
-  const { error } = await supabase.from("worksheet_links").insert({
-    worksheet_id: worksheetId,
-    token_hash: hash,
-    expires_at: tokenExpiry(WORKSHEET_TOKEN_TTL_DAYS).toISOString(),
+  const rotated = await withWorksheetLinkLease(worksheetId, async () => {
+    const { error: revokeError } = await supabase
+      .from("worksheet_links")
+      .update({ revoked_at: new Date().toISOString() })
+      .eq("worksheet_id", worksheetId)
+      .is("revoked_at", null);
+    if (revokeError) throw new Error(`Could not revoke old links: ${revokeError.message}`);
+
+    const { error } = await supabase.from("worksheet_links").insert({
+      worksheet_id: worksheetId,
+      token_hash: hash,
+      expires_at: tokenExpiry(WORKSHEET_TOKEN_TTL_DAYS).toISOString(),
+    });
+    if (error) throw new Error(`Could not create link: ${error.message}`);
+    return true;
   });
-  if (error) throw new Error(`Could not create link: ${error.message}`);
+  if (!rotated) {
+    throw new Error(
+      "A reminder is being sent to this customer right now — try again in a few minutes"
+    );
+  }
 
   const customer = worksheet.customers as unknown as {
     business_name: string;
